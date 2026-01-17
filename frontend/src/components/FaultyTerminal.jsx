@@ -254,19 +254,28 @@ export default function FaultyTerminal({
   const frozenTimeRef = useRef(0);
   const rafRef = useRef(0);
   const loadAnimationStartRef = useRef(0);
-  // Use a module-level variable to persist time offset across remounts
-  let timeOffset = (() => {
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("faultyTerminalTimeOffset");
-      if (stored) return parseFloat(stored);
-      const newOffset = Math.random() * 100;
-      sessionStorage.setItem("faultyTerminalTimeOffset", newOffset.toString());
-      return newOffset;
-    }
-    return Math.random() * 100;
-  })();
+  const timeOffsetRef = useRef(null);
 
-  const timeOffsetRef = useRef(timeOffset);
+  // Initialize timeOffsetRef once using useEffect to avoid calling Math.random during render
+  useEffect(() => {
+    if (timeOffsetRef.current === null) {
+      if (typeof window !== "undefined") {
+        const stored = sessionStorage.getItem("faultyTerminalTimeOffset");
+        if (stored) {
+          timeOffsetRef.current = parseFloat(stored);
+        } else {
+          const newOffset = Math.random() * 100;
+          sessionStorage.setItem(
+            "faultyTerminalTimeOffset",
+            newOffset.toString()
+          );
+          timeOffsetRef.current = newOffset;
+        }
+      } else {
+        timeOffsetRef.current = Math.random() * 100;
+      }
+    }
+  }, []);
 
   const tintVec = useMemo(() => hexToRgb(tint), [tint]);
 
@@ -358,7 +367,8 @@ export default function FaultyTerminal({
       }
 
       if (!pause) {
-        const elapsed = (t * 0.001 + timeOffsetRef.current) * timeScale;
+        const timeOffset = timeOffsetRef.current ?? 0;
+        const elapsed = (t * 0.001 + timeOffset) * timeScale;
         program.uniforms.iTime.value = elapsed;
         frozenTimeRef.current = elapsed;
       } else {

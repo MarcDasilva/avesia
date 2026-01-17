@@ -4,9 +4,10 @@ import FaultyTerminal from "./components/FaultyTerminal.jsx";
 import EC2Console from "./components/EC2Console.jsx";
 import LogoLoop from "./components/LogoLoop.jsx";
 import { useAuth } from "./contexts/AuthContext.jsx";
+import { Dashboard } from "./components/Dashboard.jsx";
 
 function App() {
-  const { user, loading: authLoading, signInWithGoogle, signOut } = useAuth();
+  const { user, loading: authLoading, signInWithGoogle } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const textRef = useRef(null);
   const [textWidth, setTextWidth] = useState("fit-content");
@@ -44,45 +45,9 @@ function App() {
     }
   };
 
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-    } catch (error) {
-      console.error("Error signing out:", error);
-    }
-  };
-
-  // If user is logged in, show logged in page
+  // If user is logged in, show dashboard
   if (!authLoading && user) {
-    return (
-      <div
-        style={{
-          width: "100%",
-          height: "100vh",
-          backgroundColor: "#000000",
-          position: "relative",
-        }}
-      >
-        <button
-          onClick={handleSignOut}
-          style={{
-            position: "absolute",
-            top: "20px",
-            right: "20px",
-            padding: "8px 16px",
-            backgroundColor: "#ff0000",
-            color: "#ffffff",
-            border: "none",
-            fontSize: "14px",
-            fontWeight: "bold",
-            cursor: "pointer",
-            zIndex: 1000,
-          }}
-        >
-          Log Out
-        </button>
-      </div>
-    );
+    return <Dashboard />;
   }
 
   // Main page when not logged in
