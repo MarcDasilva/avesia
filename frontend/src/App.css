@@ -1,0 +1,12 @@
+.fade-overlay {
+  transition: opacity 0.5s ease-in-out;
+}
+
+.fade-overlay.visible {
+  opacity: 1;
+}
+
+.fade-overlay.fade-out {
+  opacity: 0;
+}
+
