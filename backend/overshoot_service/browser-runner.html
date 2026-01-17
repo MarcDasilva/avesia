@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overshoot Vision Runner</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .status.stopped {
+            background: #ffe0e0;
+            color: #c00;
+        }
+        .status.running {
+            background: #e0ffe0;
+            color: #0a0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        button.start {
+            background: #4CAF50;
+            color: white;
+        }
+        button.stop {
+            background: #f44336;
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e3f2fd;
+            border-radius: 5px;
+            color: #1976d2;
+        }
+        .error {
+            margin-top: 20px;
+            padding: 15px;
+            background: #ffebee;
+            border-radius: 5px;
+            color: #c62828;
+            display: none;
+        }
+        #results {
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .result-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-left: 3px solid #4CAF50;
+            border-radius: 3px;
+        }
+        .camera-prompt {
+            padding: 20px;
+            margin: 20px 0;
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .camera-prompt h3 {
+            margin-top: 0;
+            color: #856404;
+        }
+        .camera-prompt button {
+            background: #ffc107;
+            color: #000;
+            padding: 12px 24px;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        #cameraFeed {
+            width: 100%;
+            max-width: 640px;
+            height: auto;
+            border-radius: 8px;
+            margin: 20px 0;
+            background: #000;
+            display: none;
+        }
+        #cameraFeed.active {
+            display: block;
+        }
+        .debug-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .debug-info h4 {
+            margin-top: 0;
+            color: #666;
+        }
+    </style>
+    <script type="module">
+        // Import Overshoot SDK first
+        import { RealtimeVision } from 'https://cdn.jsdelivr.net/npm/@overshoot/sdk@0.1.0-alpha.2/dist/index.mjs'
+        
+        // Get config from URL parameters
+        const urlParams = new URLSearchParams(window.location.search)
+        
+        // Parse nodes and outputSchema from URL params
+        let nodes = []
+        let outputSchema = null
+        
+        try {
+            const nodesParam = urlParams.get('nodes')
+            const schemaParam = urlParams.get('schema')
+            if (nodesParam) {
+                nodes = JSON.parse(decodeURIComponent(nodesParam))
+            }
+            if (schemaParam) {
+                outputSchema = JSON.parse(decodeURIComponent(schemaParam))
+            }
+        } catch (e) {
+            console.warn('Failed to parse nodes/schema from URL:', e)
+        }
+        
+        const config = {
+            apiUrl: urlParams.get('apiUrl') || 'https://cluster1.overshoot.ai/api/v0.2',
+            apiKey: urlParams.get('apiKey') || '',
+            prompt: urlParams.get('prompt') || 'Read any visible text',
+            pythonBackendUrl: urlParams.get('pythonBackendUrl') || 'http://localhost:8000',
+            nodes: nodes,
+            outputSchema: outputSchema
+        }
+
+        // Debug: Log config to console
+        console.log('Config loaded:', {
+            apiUrl: config.apiUrl,
+            apiKey: config.apiKey ? `${config.apiKey.substring(0, 10)}...` : 'MISSING',
+            prompt: config.prompt,
+            pythonBackendUrl: config.pythonBackendUrl,
+            nodesCount: config.nodes.length,
+            hasOutputSchema: !!config.outputSchema
+        })
+        
+        if (config.nodes.length > 0) {
+            console.log('📦 Nodes configuration:', config.nodes)
+            console.log('📋 Output Schema:', config.outputSchema)
+        }
+
+        let vision = null
+        let isRunning = false
+        let currentStream = null // Store stream reference to prevent garbage collection
+
+        const statusDiv = document.getElementById('status')
+        const startBtn = document.getElementById('startBtn')
+        const stopBtn = document.getElementById('stopBtn')
+        const resultsDiv = document.getElementById('results')
+        const errorDiv = document.getElementById('error')
+        const cameraPromptDiv = document.getElementById('cameraPrompt')
+        const enableCameraBtn = document.getElementById('enableCameraBtn')
+        const cameraFeed = document.getElementById('cameraFeed')
+        const debugInfo = document.getElementById('debugInfo')
+        
+        let resultCount = 0
+        let lastResultTime = null
+        
+        // Monitor stream health
+        function monitorStreamHealth(stream) {
+            if (!stream) return
+            
+            stream.getTracks().forEach(track => {
+                track.onended = () => {
+                    console.warn('⚠️ Camera track ended unexpectedly:', track.kind, track.label)
+                    if (isRunning) {
+                        showError('⚠️ Camera stream lost. Please restart the camera.')
+                    }
+                }
+                
+                track.onerror = (error) => {
+                    console.error('❌ Camera track error:', error)
+                    if (isRunning) {
+                        showError('⚠️ Camera stream error. Please restart the camera.')
+                    }
+                }
+            })
+        }
+
+        // Check camera permissions on load
+        async function checkCameraPermissions() {
+            try {
+                console.log('🔍 Checking camera availability...')
+                const devices = await navigator.mediaDevices.enumerateDevices()
+                const videoDevices = devices.filter(device => device.kind === 'videoinput')
+                console.log(`📹 Found ${videoDevices.length} camera device(s)`)
+                
+                if (videoDevices.length === 0) {
+                    console.warn('⚠️ No camera devices found')
+                    showError('⚠️ No camera found. Please connect a camera and refresh the page.')
+                    return false
+                }
+                
+                console.log('🔐 Requesting camera permission...')
+                const stream = await Promise.race([
+                    navigator.mediaDevices.getUserMedia({ video: true, audio: false }),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Permission request timed out')), 5000)
+                    )
+                ])
+                
+                // Camera permission granted, stop the stream immediately
+                stream.getTracks().forEach(track => track.stop())
+                cameraPromptDiv.style.display = 'none'
+                console.log('✅ Camera permission granted')
+                return true
+            } catch (error) {
+                // Camera permission denied or not available
+                console.error('❌ Camera permission check failed:', error.name, error.message)
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    console.log('🔒 Camera permission denied by user')
+                    cameraPromptDiv.style.display = 'block'
+                    return false
+                } else if (error.name === 'NotFoundError') {
+                    console.error('❌ No camera device found')
+                    showError('⚠️ No camera found. Please connect a camera and refresh the page.')
+                    return false
+                } else if (error.message.includes('timed out')) {
+                    console.error('⏱️ Camera permission request timed out')
+                    showError('⚠️ Camera permission request timed out. Please try again.')
+                    return false
+                } else {
+                    console.error('❌ Unexpected camera error:', error)
+                    showError(`⚠️ Camera error: ${error.message || error.name}`)
+                    return false
+                }
+            }
+        }
+
+        // Request camera permissions explicitly
+        async function requestCameraPermission() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                // Permission granted, stop the test stream
+                stream.getTracks().forEach(track => track.stop())
+                cameraPromptDiv.style.display = 'none'
+                showError('') // Clear any errors
+                // Now start vision processing
+                await startVision()
+            } catch (error) {
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    showError('⚠️ Camera permission denied. Please click the camera icon in your browser address bar and allow camera access, then try again.')
+                } else {
+                    showError(`⚠️ Failed to access camera: ${error.message}`)
+                }
+                console.error('Camera permission error:', error)
+            }
+        }
+
+        function updateStatus(running, message = null) {
+            isRunning = running
+            if (running) {
+                statusDiv.textContent = message || '🟢 Camera is active and processing'
+                statusDiv.className = 'status running'
+                startBtn.disabled = true
+                stopBtn.disabled = false
+            } else {
+                statusDiv.textContent = message || '🔴 Camera is stopped'
+                statusDiv.className = 'status stopped'
+                startBtn.disabled = false
+                stopBtn.disabled = true
+            }
+        }
+
+        function showError(message) {
+            errorDiv.textContent = message
+            errorDiv.style.display = 'block'
+            setTimeout(() => {
+                errorDiv.style.display = 'none'
+            }, 5000)
+        }
+
+        async function startVision() {
+            console.log('🚀 Starting vision process...')
+            updateStatus(false, '⏳ Initializing...') // Show progress
+            startBtn.disabled = true // Disable button during startup
+            
+            // Check if API key is valid (not empty and not placeholder)
+            if (!config.apiKey || config.apiKey.trim() === '' || config.apiKey === 'your-api-key') {
+                showError('⚠️ API Key is missing or invalid. Please check that OVERSHOOT_API_KEY is set in backend/.env')
+                console.error('API Key check failed:', {
+                    apiKey: config.apiKey ? `${config.apiKey.substring(0, 10)}...` : 'undefined/empty',
+                    urlParams: window.location.search
+                })
+                return
+            }
+            console.log('✅ API Key validated')
+
+            // Skip separate permission check - we'll get the stream directly
+            // This avoids timing out on permission check when we're about to request stream anyway
+
+            if (vision) {
+                console.log('🛑 Stopping existing vision instance...')
+                await vision.stop()
+            }
+
+            try {
+                console.log('📹 Requesting camera stream...')
+                const streamStartTime = Date.now()
+                console.log('🔍 Creating RealtimeVision instance with config:', {
+                    apiUrl: config.apiUrl,
+                    apiKey: config.apiKey ? `${config.apiKey.substring(0, 10)}...` : 'MISSING',
+                    prompt: config.prompt.substring(0, 50) + '...',
+                    hasOutputSchema: !!config.outputSchema,
+                    nodesCount: config.nodes.length
+                })
+                
+                // Create video element for camera preview with timeout
+                updateStatus(false, '⏳ Requesting camera stream...')
+                console.log('📹 Requesting camera stream (timeout: 10s)...')
+                
+                let videoStream
+                try {
+                    videoStream = await Promise.race([
+                        navigator.mediaDevices.getUserMedia({ 
+                            video: { 
+                                width: { ideal: 1280 },
+                                height: { ideal: 720 },
+                                facingMode: 'user'
+                            }, 
+                            audio: false 
+                        }),
+                        new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Camera stream request timed out after 10 seconds')), 10000)
+                        )
+                    ])
+                    
+                    const streamTime = Date.now() - streamStartTime
+                    console.log(`✅ Camera stream obtained (took ${streamTime}ms)`)
+                    
+                    // Store stream reference to prevent garbage collection
+                    currentStream = videoStream
+                    
+                    // Monitor stream health
+                    monitorStreamHealth(videoStream)
+                    
+                    cameraFeed.srcObject = videoStream
+                    cameraFeed.classList.add('active')
+                    console.log('📹 Video element updated with camera stream')
+                    console.log(`📊 Stream tracks: ${videoStream.getTracks().length} (${videoStream.getTracks().map(t => t.kind).join(', ')})`)
+                    
+                    // Wait for video to be ready (but don't block if it takes too long)
+                    await Promise.race([
+                        new Promise((resolve) => {
+                            cameraFeed.onloadedmetadata = () => {
+                                console.log('✅ Video metadata loaded')
+                                resolve()
+                            }
+                        }),
+                        new Promise(resolve => setTimeout(resolve, 2000)) // Max 2 seconds wait
+                    ])
+                    
+                    // Verify stream is still active before proceeding
+                    const activeTracks = videoStream.getTracks().filter(t => t.readyState === 'live')
+                    if (activeTracks.length === 0) {
+                        throw new Error('Camera stream has no active tracks')
+                    }
+                    console.log(`✅ Stream verified: ${activeTracks.length} active track(s)`)
+                } catch (streamError) {
+                    console.error('❌ Failed to get camera stream:', streamError)
+                    if (streamError.name === 'NotAllowedError' || streamError.name === 'PermissionDeniedError') {
+                        cameraPromptDiv.style.display = 'block'
+                        updateStatus(false, '🔴 Camera permission required')
+                        startBtn.disabled = false
+                        return
+                    }
+                    throw streamError
+                }
+                
+                // Build vision config
+                const visionConfig = {
+                    apiUrl: config.apiUrl,
+                    apiKey: config.apiKey,
+                    prompt: config.prompt,
+                    onResult: async (result) => {
+                        resultCount++
+                        lastResultTime = new Date()
+                        console.log(`✅ Result #${resultCount} received:`, result)
+                        
+                        // Parse result - if outputSchema was used, result.result is JSON string
+                        let parsedResult = result.result
+                        let isJson = false
+                        
+                        if (config.outputSchema) {
+                            try {
+                                parsedResult = JSON.parse(result.result)
+                                isJson = true
+                                console.log('📦 Parsed JSON result:', parsedResult)
+                            } catch (e) {
+                                console.warn('⚠️ Expected JSON but parsing failed:', e)
+                                console.log('Raw result:', result.result)
+                            }
+                        }
+                        
+                        // Update debug info
+                        debugInfo.innerHTML = `
+                            <h4>📊 Debug Info</h4>
+                            <div>Results received: ${resultCount}</div>
+                            <div>Last result: ${lastResultTime ? lastResultTime.toLocaleTimeString() : 'None'}</div>
+                            <div>Vision status: ${vision ? 'Active' : 'Inactive'}</div>
+                            <div>Using structured output: ${!!config.outputSchema}</div>
+                            <div>Full result object: <pre>${JSON.stringify(result, null, 2)}</pre></div>
+                            ${isJson ? `<div>Parsed JSON: <pre>${JSON.stringify(parsedResult, null, 2)}</pre></div>` : ''}
+                        `
+                        
+                        // Display result on page with node information
+                        const resultDiv = document.createElement('div')
+                        resultDiv.className = 'result-item'
+                        
+                        if (isJson && config.nodes.length > 0) {
+                            // Display structured results with node names
+                            let resultHtml = `<strong>Structured Result:</strong><br>`
+                            for (const node of config.nodes) {
+                                const fieldName = node.name || node.id
+                                const value = parsedResult[fieldName]
+                                const dataType = node.datatype || 'unknown'
+                                resultHtml += `<div style="margin: 5px 0;">
+                                    <strong>${fieldName}</strong> (${dataType}): 
+                                    <span style="font-family: monospace;">${JSON.stringify(value)}</span>
+                                </div>`
+                            }
+                            resultDiv.innerHTML = resultHtml
+                        } else {
+                            // Display plain text result
+                            resultDiv.innerHTML = `
+                                <strong>Prompt:</strong> ${config.prompt}<br>
+                                <strong>Detected:</strong> ${parsedResult}
+                            `
+                        }
+                        resultsDiv.insertBefore(resultDiv, resultsDiv.firstChild)
+                        
+                        // Keep only last 20 results
+                        while (resultsDiv.children.length > 20) {
+                            resultsDiv.removeChild(resultsDiv.lastChild)
+                        }
+
+                        // Send result to Python backend
+                        try {
+                            const response = await fetch(`${config.pythonBackendUrl}/api/results`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    result: isJson ? JSON.stringify(parsedResult) : parsedResult,
+                                    timestamp: new Date().toISOString(),
+                                    prompt: config.prompt,
+                                    node_id: config.nodes.length > 0 ? 'structured' : null
+                                })
+                            })
+                            if (!response.ok) {
+                                throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+                            }
+                            console.log('✅ Result sent to Python backend successfully')
+                        } catch (error) {
+                            console.error('❌ Error sending result to Python backend:', error)
+                            showError(`Failed to send result to Python backend: ${error.message}`)
+                        }
+                    },
+                    onError: (error) => {
+                        console.error('❌ Overshoot SDK error:', error)
+                        const errorMsg = error.message || error.toString()
+                        debugInfo.innerHTML += `<div style="color: red;">Error: ${errorMsg}</div>`
+                        
+                        // Check stream health when errors occur
+                        if (currentStream) {
+                            const activeTracks = currentStream.getTracks().filter(t => t.readyState === 'live')
+                            console.log(`📊 Stream health check: ${activeTracks.length}/${currentStream.getTracks().length} tracks active`)
+                            if (activeTracks.length === 0) {
+                                console.error('❌ All camera tracks are inactive!')
+                                showError('⚠️ Camera stream lost. Please restart the camera.')
+                                updateStatus(false, '🔴 Camera stream lost')
+                                startBtn.disabled = false
+                                return
+                            }
+                        }
+                        
+                        // Check if it's a stream_not_found or keepalive error
+                        if (errorMsg.includes('stream_not_found') || errorMsg.includes('Keepalive failed')) {
+                            console.error('❌ Stream not found error - camera stream may have been lost')
+                            showError('⚠️ Camera stream lost. Attempting to restart...')
+                            
+                            // Attempt to reconnect after a delay
+                            setTimeout(async () => {
+                                try {
+                                    if (vision) {
+                                        await vision.stop()
+                                    }
+                                    // Clean up old stream
+                                    if (currentStream) {
+                                        currentStream.getTracks().forEach(track => track.stop())
+                                        currentStream = null
+                                    }
+                                    await startVision()
+                                    console.log('✅ Reconnected successfully')
+                                    showError('') // Clear error
+                                } catch (reconnectError) {
+                                    console.error('❌ Reconnection failed:', reconnectError)
+                                    showError(`Reconnection failed: ${reconnectError.message}`)
+                                    updateStatus(false, '❌ Reconnection failed')
+                                    startBtn.disabled = false
+                                }
+                            }, 3000) // Wait 3 seconds before reconnecting
+                        } else if (errorMsg.includes('WebSocket') || errorMsg.includes('closed')) {
+                            console.log('🔄 WebSocket connection lost. Attempting to reconnect...')
+                            showError('⚠️ Connection lost. Reconnecting...')
+                            
+                            // Attempt to reconnect after a delay
+                            setTimeout(async () => {
+                                try {
+                                    if (vision) {
+                                        await vision.stop()
+                                    }
+                                    await startVision()
+                                    console.log('✅ Reconnected successfully')
+                                    showError('') // Clear error
+                                } catch (reconnectError) {
+                                    console.error('❌ Reconnection failed:', reconnectError)
+                                    showError(`Reconnection failed: ${reconnectError.message}`)
+                                }
+                            }, 3000) // Wait 3 seconds before reconnecting
+                        } else {
+                            showError(`Overshoot SDK error: ${errorMsg}`)
+                        }
+                    }
+                }
+                
+                // Add outputSchema if configured
+                if (config.outputSchema && Object.keys(config.outputSchema).length > 0) {
+                    visionConfig.outputSchema = config.outputSchema
+                    console.log('📋 Using outputSchema:', JSON.stringify(config.outputSchema, null, 2))
+                } else {
+                    console.warn('⚠️ No outputSchema configured - results will be plain text')
+                }
+                
+                console.log('📦 Creating RealtimeVision with config:', {
+                    apiUrl: visionConfig.apiUrl,
+                    hasApiKey: !!visionConfig.apiKey,
+                    prompt: visionConfig.prompt.substring(0, 50) + '...',
+                    hasOutputSchema: !!visionConfig.outputSchema
+                })
+                
+                vision = new RealtimeVision(visionConfig)
+                
+                console.log('📦 RealtimeVision instance created')
+                updateStatus(false, '⏳ Connecting to Overshoot SDK...')
+                console.log('🚀 Starting Overshoot SDK (this may take a few seconds)...')
+                console.log('   Note: SDK needs to establish WebRTC connection, this can take 10-20 seconds')
+                
+                const visionStartTime = Date.now()
+                
+                // Add longer timeout for vision.start() - WebRTC connection can take time
+                // Also add progress logging
+                const progressInterval = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - visionStartTime) / 1000)
+                    if (elapsed > 5 && elapsed % 5 === 0) {
+                        console.log(`⏳ Still connecting... (${elapsed}s elapsed)`)
+                        updateStatus(false, `⏳ Connecting to Overshoot SDK... (${elapsed}s)`)
+                    }
+                }, 1000)
+                
+                try {
+                    await Promise.race([
+                        vision.start(),
+                        new Promise((_, reject) => 
+                            setTimeout(() => {
+                                clearInterval(progressInterval)
+                                reject(new Error('Vision start timed out after 30 seconds. Check your network connection and VPN.'))
+                            }, 30000) // Increased to 30 seconds for WebRTC
+                        )
+                    ])
+                    clearInterval(progressInterval)
+                    
+                    const visionStartTimeElapsed = Date.now() - visionStartTime
+                    console.log(`✅ Vision started successfully (took ${visionStartTimeElapsed}ms)`)
+                    updateStatus(true, '🟢 Camera is active and processing')
+                } catch (startError) {
+                    const visionStartTimeElapsed = Date.now() - visionStartTime
+                    console.error(`❌ Error during vision.start() after ${visionStartTimeElapsed}ms:`, startError)
+                    
+                    // Clean up on error
+                    if (cameraFeed.srcObject) {
+                        cameraFeed.srcObject.getTracks().forEach(track => track.stop())
+                        cameraFeed.srcObject = null
+                        cameraFeed.classList.remove('active')
+                    }
+                    
+                    updateStatus(false, `❌ Failed: ${startError.message || 'Connection timeout'}`)
+                    startBtn.disabled = false // Re-enable button on error
+                    throw startError
+                }
+                
+                // Update debug info
+                debugInfo.innerHTML = `
+                    <h4>📊 Debug Info</h4>
+                    <div>Results received: 0 (waiting for results...)</div>
+                    <div>Vision started: ${new Date().toLocaleTimeString()}</div>
+                    <div>Vision status: Active</div>
+                    <div>API URL: ${config.apiUrl}</div>
+                    <div>Prompt: ${config.prompt}</div>
+                `
+                
+                // Check for results periodically and log status
+                setTimeout(() => {
+                    if (resultCount === 0) {
+                        console.warn('⚠️ No results received after 5 seconds')
+                        debugInfo.innerHTML += `<div style="color: orange;">⚠️ No results received yet. Check browser console for SDK errors.</div>`
+                    }
+                }, 5000)
+            } catch (error) {
+                console.error('Error starting vision:', error)
+                let errorMessage = `Failed to start vision: ${error.message}`
+                
+                // Provide helpful messages for common errors
+                if (error.message.includes('Permission denied') || error.message.includes('NotAllowedError')) {
+                    errorMessage = '⚠️ Camera permission denied. Please allow camera access in your browser settings and try again.'
+                } else if (error.message.includes('NotFoundError') || error.message.includes('no camera')) {
+                    errorMessage = '⚠️ No camera found. Please connect a camera and try again.'
+                }
+                
+                showError(errorMessage)
+                updateStatus(false)
+            }
+        }
+
+        async function stopVision() {
+            if (vision) {
+                try {
+                    await vision.stop()
+                    vision = null
+                    updateStatus(false)
+                    
+                    // Stop camera feed and stream
+                    if (cameraFeed.srcObject) {
+                        cameraFeed.srcObject.getTracks().forEach(track => track.stop())
+                        cameraFeed.srcObject = null
+                        cameraFeed.classList.remove('active')
+                    }
+                    
+                    // Also stop stored stream reference
+                    if (currentStream) {
+                        currentStream.getTracks().forEach(track => track.stop())
+                        currentStream = null
+                    }
+                    
+                    // Clear any connection monitors
+                    if (window.connectionMonitor) {
+                        clearInterval(window.connectionMonitor)
+                    }
+                    
+                    console.log('⏸️ Vision stopped')
+                } catch (error) {
+                    console.error('Error stopping vision:', error)
+                    showError(`Failed to stop vision: ${error.message}`)
+                }
+            }
+        }
+        
+        // Store connection monitor globally so we can clear it
+        window.connectionMonitor = null
+
+        // Set up button handlers
+        startBtn.addEventListener('click', startVision)
+        stopBtn.addEventListener('click', stopVision)
+        enableCameraBtn.addEventListener('click', requestCameraPermission)
+
+        // Check camera permissions on page load
+        checkCameraPermissions()
+
+        // Auto-start if AUTO_START is not false (check URL param)
+        const autoStart = urlParams.get('autoStart') !== 'false'
+        if (autoStart && config.apiKey && config.apiKey !== 'your-api-key') {
+            // Don't auto-start if camera permission is needed
+            checkCameraPermissions().then(hasPermission => {
+                if (hasPermission) {
+                    startVision()
+                }
+            })
+        } else {
+            updateStatus(false)
+        }
+
+        // Show current prompt
+        document.getElementById('currentPrompt').textContent = config.prompt
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>📹 Overshoot Vision Service</h1>
+        
+        <div id="status" class="status stopped">🔴 Camera is stopped</div>
+
+        <div id="cameraPrompt" class="camera-prompt" style="display: none;">
+            <h3>📷 Camera Permission Required</h3>
+            <p>This application needs access to your camera to process video.</p>
+            <p>Click the button below to enable camera access.</p>
+            <button id="enableCameraBtn">Enable Camera</button>
+            <p style="font-size: 12px; margin-top: 15px; color: #666;">
+                If you see a browser permission prompt, click "Allow" to proceed.
+            </p>
+        </div>
+        
+        <div>
+            <button id="startBtn" class="start">Start Camera</button>
+            <button id="stopBtn" class="stop" disabled>Stop Camera</button>
+        </div>
+
+        <div class="info">
+            <strong>Current Prompt:</strong> <span id="currentPrompt"></span>
+        </div>
+
+        <div id="error" class="error"></div>
+
+        <div>
+            <h3>📹 Camera Feed:</h3>
+            <video id="cameraFeed" autoplay playsinline muted></video>
+        </div>
+
+        <div id="debugInfo" class="debug-info">
+            <h4>📊 Debug Info</h4>
+            <div>Waiting to start...</div>
+        </div>
+
+        <div>
+            <h3>Detected Results:</h3>
+            <div id="results"></div>
+        </div>
+    </div>
+</body>
+</html>
