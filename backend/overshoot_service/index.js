@@ -25,7 +25,9 @@ app.use(express.static(__dirname)) // Serve static files (HTML, etc.)
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000'
 const NODE_SERVICE_PORT = process.env.NODE_SERVICE_PORT || 3001
 
-let currentPrompt = process.env.INITIAL_PROMPT || 'Read any visible text'
+let currentPrompt = process.env.INITIAL_PROMPT || 'explain surroundings'
+let currentNodes = []
+let currentOutputSchema = null
 
 // Debug: Check API key
 const apiKey = process.env.OVERSHOOT_API_KEY
@@ -36,13 +38,39 @@ if (!apiKey || apiKey === 'your-api-key') {
   console.log(`✅ API Key loaded (${apiKey.substring(0, 10)}...)`)
 }
 
+// Endpoint to get current nodes configuration
+app.get('/api/nodes', (req, res) => {
+  res.json({
+    nodes: currentNodes,
+    outputSchema: currentOutputSchema,
+    prompt: currentPrompt
+  })
+})
+
 // Endpoint to get configuration for the HTML page
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  // If nodes haven't been set yet, try to fetch from Python backend
+  if (currentNodes.length === 0) {
+    try {
+      const axios = (await import('axios')).default
+      const response = await axios.get(`${PYTHON_BACKEND_URL}/api/nodes`, { timeout: 2000 })
+      if (response.data && response.data.nodes) {
+        currentNodes = response.data.nodes || []
+        // Note: outputSchema and prompt would need to be regenerated, but for now just use what we have
+        console.log('📥 Fetched nodes from Python backend:', currentNodes.length)
+      }
+    } catch (e) {
+      console.log('⚠️  Could not fetch nodes from Python backend (it may not be running)')
+    }
+  }
+  
   const config = {
     apiUrl: 'https://cluster1.overshoot.ai/api/v0.2',
     apiKey: process.env.OVERSHOOT_API_KEY || 'your-api-key',
     prompt: currentPrompt,
-    pythonBackendUrl: PYTHON_BACKEND_URL
+    pythonBackendUrl: PYTHON_BACKEND_URL,
+    nodes: currentNodes.length > 0 ? JSON.stringify(currentNodes) : '',
+    outputSchema: currentOutputSchema ? JSON.stringify(currentOutputSchema) : ''
   }
   
   // Build URL with config parameters
@@ -53,8 +81,43 @@ app.get('/', (req, res) => {
     pythonBackendUrl: config.pythonBackendUrl
   })
   
+  // Add nodes and schema if they exist (using shorter parameter names)
+  if (config.nodes) {
+    params.append('nodes', config.nodes)
+  }
+  if (config.outputSchema) {
+    params.append('schema', config.outputSchema)
+  }
+  
   // Redirect to the HTML page with config
   res.redirect(`/browser-runner.html?${params.toString()}`)
+})
+
+// Endpoint to update nodes from Python
+app.post('/api/nodes', (req, res) => {
+  const { nodes, outputSchema, prompt } = req.body
+  
+  if (!nodes || !Array.isArray(nodes)) {
+    return res.status(400).json({ error: 'Nodes must be an array' })
+  }
+
+  currentNodes = nodes
+  currentOutputSchema = outputSchema || null
+  currentPrompt = prompt || currentPrompt
+
+  console.log('📦 Nodes updated:', {
+    nodeCount: currentNodes.length,
+    hasSchema: !!currentOutputSchema,
+    prompt: currentPrompt.substring(0, 50) + '...'
+  })
+
+  res.json({ 
+    success: true, 
+    message: 'Nodes updated. Refresh the browser page to apply the new configuration.',
+    nodes: currentNodes,
+    outputSchema: currentOutputSchema,
+    prompt: currentPrompt 
+  })
 })
 
 // Endpoint to update prompt from Python
@@ -95,6 +158,8 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     currentPrompt,
+    nodesCount: currentNodes.length,
+    hasOutputSchema: !!currentOutputSchema,
     message: 'Open http://localhost:3001 in your browser to start vision processing'
   })
 })

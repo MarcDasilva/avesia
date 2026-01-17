@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "prompt": "Is there a person in front of the camera?",
+      "datatype": "boolean",
+      "name": "has_person"
+    },
+    {
+      "prompt": "Count the number of cans visible in the frame",
+      "datatype": "integer",
+      "name": "can_count"
+    },
+    {
+      "prompt": "Are there any red objects visible?",
+      "datatype": "boolean",
+      "name": "has_red_objects"
+    },
+    {
+      "prompt": "How many people are in the frame?",
+      "datatype": "integer",
+      "name": "people_count"
+    },
+    {
+      "prompt": "Describe if anyone looks like they are in distress and how to help them.",
+      "datatype": "string",
+      "name": "threat_description"
+    }
+  ]
+}
+
