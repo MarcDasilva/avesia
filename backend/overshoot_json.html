@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overshoot RealtimeVision - Structured Output</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        button.stop {
+            background: #dc3545;
+        }
+        button.stop:hover {
+            background: #c82333;
+        }
+        #results {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .result-item {
+            padding: 10px;
+            margin: 10px 0;
+            background: white;
+            border-left: 4px solid #007bff;
+            border-radius: 3px;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 12px;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Overshoot RealtimeVision → Python Backend (JSON)</h1>
+        
+        <div id="status" class="status info">
+            Ready to start. Click "Start Vision" to begin.
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <button id="startBtn" onclick="startVision()">Start Vision</button>
+            <button id="stopBtn" class="stop" onclick="stopVision()" disabled>Stop Vision</button>
+        </div>
+        
+        <div id="results">
+            <p style="color: #666;">Results will appear here...</p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { RealtimeVision } from 'https://esm.sh/@overshoot/sdk'
+        import { OVERSHOOT_CONFIG } from './config.js'
+
+        const PYTHON_BACKEND = 'http://localhost:3001/overshoot-data'
+        let vision = null
+        
+        // Function to send data to Python backend
+        async function sendToPython(data) {
+            try {
+                const response = await fetch(PYTHON_BACKEND, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                })
+                
+                if (response.ok) {
+                    console.log('✓ Data sent to Python backend')
+                    updateStatus('Data sent to Python backend successfully', 'success')
+                } else {
+                    console.error('✗ Failed to send to Python:', response.status)
+                    updateStatus(`Failed to send to Python: ${response.status}`, 'error')
+                }
+            } catch (error) {
+                console.error('✗ Error sending to Python:', error.message)
+                updateStatus(`Python backend error: ${error.message}. Make sure overshoot_backend.py is running!`, 'error')
+            }
+        }
+        
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status')
+            statusDiv.textContent = message
+            statusDiv.className = `status ${type}`
+        }
+        
+        function addResult(data) {
+            const resultsDiv = document.getElementById('results')
+            const resultItem = document.createElement('div')
+            resultItem.className = 'result-item'
+            
+            const timestamp = new Date().toLocaleTimeString()
+            resultItem.innerHTML = `
+                <div class="timestamp">${timestamp}</div>
+                <pre>${JSON.stringify(data, null, 2)}</pre>
+            `
+            
+            // Clear placeholder text
+            if (resultsDiv.querySelector('p')) {
+                resultsDiv.innerHTML = ''
+            }
+            
+            resultsDiv.insertBefore(resultItem, resultsDiv.firstChild)
+        }
+        
+        window.startVision = async function() {
+            try {
+                updateStatus('Initializing camera and starting Overshoot...', 'info')
+                document.getElementById('startBtn').disabled = true
+                
+                vision = new RealtimeVision({
+                    apiUrl: OVERSHOOT_CONFIG.apiUrl,
+                    apiKey: OVERSHOOT_CONFIG.apiKey,
+                    prompt: 'Analyze the scene and extract any visible text or important objects',
+                    outputSchema: {
+                        type: 'object',
+                        properties: {
+                            text: { 
+                                type: 'string',
+                                description: 'Any visible text in the frame'
+                            },
+                            objects: { 
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: 'List of important objects detected'
+                            },
+                            scene_description: { 
+                                type: 'string',
+                                description: 'Brief description of the scene'
+                            }
+                        }
+                    },
+                    onResult: async (result) => {
+                        // Parse the JSON result
+                        const data = JSON.parse(result.result)
+                        console.log('📸 Overshoot Result:', data)
+                        addResult(data)
+                        
+                        // Send the structured data to Python backend for processing
+                        await sendToPython({
+                            ...data,
+                            timestamp: new Date().toISOString(),
+                            source: 'overshoot-realtime-vision'
+                        })
+                    }
+                })
+                
+                await vision.start()
+                updateStatus('✓ Vision started! Structured JSON results will be sent to Python backend.', 'success')
+                document.getElementById('stopBtn').disabled = false
+                
+            } catch (error) {
+                console.error('Error starting vision:', error)
+                updateStatus(`Error: ${error.message}`, 'error')
+                document.getElementById('startBtn').disabled = false
+            }
+        }
+        
+        window.stopVision = async function() {
+            try {
+                updateStatus('Stopping vision...', 'info')
+                document.getElementById('stopBtn').disabled = true
+                
+                if (vision) {
+                    await vision.stop()
+                    vision = null
+                }
+                
+                updateStatus('Vision stopped.', 'info')
+                document.getElementById('startBtn').disabled = false
+                
+            } catch (error) {
+                console.error('Error stopping vision:', error)
+                updateStatus(`Error stopping: ${error.message}`, 'error')
+            }
+        }
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (vision) {
+                vision.stop()
+            }
+        })
+    </script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overshoot Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        #output {
+            background: #f4f4f4;
+            padding: 20px;
+            border-radius: 5px;
+            margin-top: 20px;
+            min-height: 100px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>Overshoot RealtimeVision Test</h1>
+    <p>Open the browser console (F12) to see results</p>
+    <button id="startBtn">Start Vision</button>
+    <button id="stopBtn" disabled>Stop Vision</button>
+    
+    <div id="output">
+        <p>Results will appear in the console...</p>
+    </div>
+
+    <script type="module">
+        import { RealtimeVision } from 'https://esm.sh/@overshoot/sdk'
+        import { OVERSHOOT_CONFIG } from './config.js'
+        
+        let vision = null
+        
+        const startBtn = document.getElementById('startBtn')
+        const stopBtn = document.getElementById('stopBtn')
+        const output = document.getElementById('output')
+        
+        startBtn.addEventListener('click', async () => {
+            try {
+                output.innerHTML = '<p>Starting camera...</p>'
+                startBtn.disabled = true
+                
+                console.log('Initializing RealtimeVision...')
+                
+                vision = new RealtimeVision({
+                    apiUrl: OVERSHOOT_CONFIG.apiUrl,
+                    apiKey: OVERSHOOT_CONFIG.apiKey,
+                    prompt: 'Describe the person you see in the video',
+                    onResult: (result) => {
+                        console.log('=== RESULT RECEIVED ===')
+                        console.log('Full result object:', result)
+                        console.log('Result text:', result.result)
+                        console.log('====================')
+                        
+                        const p = document.createElement('p')
+                        p.textContent = `[${new Date().toLocaleTimeString()}] ${result.result}`
+                        p.style.borderLeft = '3px solid #007bff'
+                        p.style.paddingLeft = '10px'
+                        p.style.marginTop = '10px'
+                        output.appendChild(p)
+                    },
+                    onError: (error) => {
+                        console.error('=== OVERSHOOT ERROR ===')
+                        console.error('Error object:', error)
+                        console.error('====================')
+                        output.innerHTML += `<p style="color: red;">Error: ${error.message || error}</p>`
+                    }
+                })
+                
+                // Log the vision object to see what properties/methods it has
+                console.log('Vision object:', vision)
+                
+                console.log('Starting vision...')
+                await vision.start()
+                console.log('Vision started successfully! Waiting for results...')
+                console.log('Stream should now be processing. Results will appear when detected...')
+                output.innerHTML = '<p>✓ Vision started! Keep this running and point camera at text. Results will appear below and in console...</p>'
+                stopBtn.disabled = false
+                
+            } catch (error) {
+                console.error('Error:', error)
+                output.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`
+                startBtn.disabled = false
+            }
+        })
+        
+        stopBtn.addEventListener('click', async () => {
+            try {
+                stopBtn.disabled = true
+                if (vision) {
+                    await vision.stop()
+                    vision = null
+                }
+                output.innerHTML += '<p>Vision stopped.</p>'
+                startBtn.disabled = false
+            } catch (error) {
+                console.error('Error stopping:', error)
+            }
+        })
+    </script>
+</body>
+</html>
