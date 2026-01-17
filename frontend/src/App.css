@@ -1,3 +1,31 @@
+@font-face {
+  font-family: "Jost";
+  src: url("/Jost/Jost-VariableFont_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Jost";
+  src: url("/Jost/Jost-Italic-VariableFont_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: italic;
+}
+
+@font-face {
+  font-family: "Zalando Sans Expanded";
+  src: url("/Jost,Zalando_Sans_Expanded/Zalando_Sans_Expanded/ZalandoSansExpanded-VariableFont_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Zalando Sans Expanded";
+  src: url("/Jost,Zalando_Sans_Expanded/Zalando_Sans_Expanded/ZalandoSansExpanded-Italic-VariableFont_wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: italic;
+}
+
 .fade-overlay {
   transition: opacity 0.5s ease-in-out;
 }
@@ -8,5 +36,45 @@
 
 .fade-overlay.fade-out {
   opacity: 0;
+}
+
+.console-box {
+  display: block;
+}
+
+.mobile-text-box {
+  display: none;
+}
+
+.desktop-text {
+  display: block;
+}
+
+.desktop-text .logoloop,
+.mobile-text-box .logoloop {
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: flex-start !important;
+}
+
+.desktop-text .logoloop__track,
+.mobile-text-box .logoloop__track {
+  justify-content: flex-start !important;
+}
+
+@media (max-width: 1024px) {
+  .console-box {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+  }
+  
+  .mobile-text-box {
+    display: block !important;
+  }
+  
+  .desktop-text {
+    display: none !important;
+  }
 }
 
