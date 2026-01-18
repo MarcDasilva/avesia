@@ -1,0 +1,39 @@
+"""
+Node Options - Centralized list of dropdown options for different node types
+"""
+
+
+class ConditionOptions:
+    """Available condition type options"""
+    OPTIONS = [
+        "weather: rain/snow/fog",
+        "lighting: day/night/low-light",
+        "time",
+        "zone",
+        "duration",
+        "frequency",
+        "custom"
+    ]
+
+
+class ListenerOptions:
+    """Available listener type options"""
+    OPTIONS = [
+        "object (person, car, animal, package)",
+        "activity (walking, running, fighting)",
+        "motion",
+        "sound (glass break, alarm)",
+        "face (known / unknown)",
+        "license_plate",
+        "gesture (hands up, waving)",
+        "custom_prompt (natural language)",
+        "custom"
+    ]
+
+
+class EventOptions:
+    """Available event type options (if needed in the future)"""
+    OPTIONS = [
+        "Gmail",
+        "Text"
+    ]
