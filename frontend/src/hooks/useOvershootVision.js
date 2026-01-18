@@ -15,6 +15,12 @@ export function useOvershootVision(config = {}) {
   const streamRef = useRef(null);
   const videoRef = useRef(null);
   const resultCountRef = useRef(0);
+  const changeDetectionIntervalRef = useRef(null);
+  const lastFrameRef = useRef(null);
+  const stillnessTimerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const isVisionActiveRef = useRef(false);
+  const isConnectingRef = useRef(false);
 
   // Helper function to log with timestamp (only important events)
   const logWithTimestamp = (message, data = null, level = "info") => {
@@ -253,9 +259,131 @@ export function useOvershootVision(config = {}) {
     }
   }, [apiUrl, apiKey, onResult, onError, prompt, outputSchema]);
 
+  const stopChangeDetection = useCallback(() => {
+    if (changeDetectionIntervalRef.current) {
+      clearInterval(changeDetectionIntervalRef.current);
+      changeDetectionIntervalRef.current = null;
+    }
+    if (stillnessTimerRef.current) {
+      clearTimeout(stillnessTimerRef.current);
+      stillnessTimerRef.current = null;
+    }
+    lastFrameRef.current = null;
+    logDebug("Change detection stopped.");
+  }, []);
+
+  const startChangeDetection = useCallback(async () => {
+    stopChangeDetection(); // Stop any existing detection
+
+    if (!videoRef.current) {
+      logWithTimestamp(
+        "⚠️ Video element not ready for change detection",
+        null,
+        "warn"
+      );
+      return;
+    }
+
+    if (!canvasRef.current) {
+      canvasRef.current = document.createElement("canvas");
+    }
+
+    const canvas = canvasRef.current;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const width = 32;
+    const height = 18;
+    canvas.width = width;
+    canvas.height = height;
+
+    const getDownscaledFrameData = () => {
+      if (
+        !videoRef.current ||
+        videoRef.current.paused ||
+        videoRef.current.ended ||
+        videoRef.current.videoWidth === 0
+      ) {
+        return null;
+      }
+      try {
+        context.drawImage(videoRef.current, 0, 0, width, height);
+        return context.getImageData(0, 0, width, height).data;
+      } catch (e) {
+        logDebug("Error getting frame data", e.name);
+        return null;
+      }
+    };
+
+    lastFrameRef.current = getDownscaledFrameData();
+
+    changeDetectionIntervalRef.current = setInterval(async () => {
+      const currentFrameData = getDownscaledFrameData();
+      if (!currentFrameData) {
+        return;
+      }
+
+      if (lastFrameRef.current) {
+        let diff = 0;
+        for (let i = 0; i < currentFrameData.length; i++) {
+          diff += Math.abs(lastFrameRef.current[i] - currentFrameData[i]);
+        }
+
+        const avgDiff = diff / currentFrameData.length;
+        const threshold = 5; // Tunable threshold
+
+        if (avgDiff > threshold) {
+          logDebug(`Change detected (diff: ${avgDiff.toFixed(2)})`);
+
+          if (!isVisionActiveRef.current && !isConnectingRef.current) {
+            isConnectingRef.current = true;
+            try {
+              logWithTimestamp(
+                "🚀 Significant change detected. Starting vision service..."
+              );
+              const vision = await initializeSDK();
+              await vision.start();
+              isVisionActiveRef.current = true;
+              setIsActive(true); // Update state for UI
+              logWithTimestamp("✅ Vision service active.");
+            } catch (err) {
+              logWithTimestamp(
+                `❌ Failed to start vision on-demand: ${err.message}`,
+                null,
+                "error"
+              );
+              setError(err.message);
+            } finally {
+              isConnectingRef.current = false;
+            }
+          }
+
+          // Reset stillness timer
+          if (stillnessTimerRef.current) {
+            clearTimeout(stillnessTimerRef.current);
+          }
+
+          stillnessTimerRef.current = setTimeout(() => {
+            logWithTimestamp(
+              "🎥 Scene appears still. Stopping vision service to save resources."
+            );
+            if (visionRef.current && isVisionActiveRef.current) {
+              visionRef.current.stop();
+              visionRef.current = null; // Force re-initialization on next start
+              isVisionActiveRef.current = false;
+              setIsActive(false); // Update state for UI
+              logWithTimestamp("✅ Vision service stopped.");
+            }
+          }, 5000); // 5 seconds of stillness
+        }
+      }
+
+      lastFrameRef.current = currentFrameData;
+    }, 500); // Check for changes twice per second
+  }, [initializeSDK, stopChangeDetection]);
+
   // Start vision processing
   const start = useCallback(async () => {
-    if (isActive || isConnecting) {
+    if (isConnecting) {
+      // Simpler check
       return;
     }
 
@@ -263,7 +391,7 @@ export function useOvershootVision(config = {}) {
     setError(null);
 
     try {
-      logWithTimestamp("🚀 Starting...");
+      logWithTimestamp("🚀 Starting camera and change detection...");
 
       // CRITICAL: Initialize SDK and get camera stream IN PARALLEL for fastest connection
       // This significantly reduces connection time (can save 1-2 seconds)
@@ -350,6 +478,7 @@ export function useOvershootVision(config = {}) {
         // Continue - SDK will work, video will attach when element is ready
       }
 
+      // CRITICAL: Set video element with stream BEFORE starting detection
       if (videoRef.current) {
         // Check if element is in DOM
         if (!videoRef.current.isConnected) {
@@ -556,69 +685,48 @@ export function useOvershootVision(config = {}) {
 
       throw err;
     }
-  }, [isActive, isConnecting, apiKey, initializeSDK]);
+  }, [isConnecting, startChangeDetection]);
 
   // Stop vision processing
   const stop = useCallback(async () => {
-    if (!isActive && !isConnecting) {
-      return;
-    }
+    logWithTimestamp("⏸️ Stopping all processes...");
 
-    try {
-      logWithTimestamp("⏸️ Stopping...");
+    stopChangeDetection();
 
-      if (visionRef.current) {
+    if (visionRef.current) {
+      try {
         await visionRef.current.stop();
-        visionRef.current = null;
+        visionRef.current = null; // Clear the instance
+      } catch (e) {
+        logDebug("Error stopping vision service", e.name);
       }
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-
-      if (videoRef.current) {
-        // Clear play interval if it exists
-        if (videoRef.current._playInterval) {
-          clearInterval(videoRef.current._playInterval);
-          delete videoRef.current._playInterval;
-        }
-        // Clean up event listeners
-        if (videoRef.current._cleanupVideoListeners) {
-          videoRef.current._cleanupVideoListeners();
-          delete videoRef.current._cleanupVideoListeners;
-        }
-        videoRef.current.srcObject = null;
-      }
-
-      setIsActive(false);
-      setIsConnecting(false);
-      setError(null);
-      resultCountRef.current = 0;
-      logWithTimestamp("✅ Stopped");
-    } catch (err) {
-      logWithTimestamp(`❌ Error stopping: ${err.message}`, null, "error");
-      setError(err.message);
     }
-  }, [isActive, isConnecting]);
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    isConnectingRef.current = false;
+    isVisionActiveRef.current = false; // Reset ref
+    setIsActive(false);
+    setIsConnecting(false);
+    setError(null);
+    resultCountRef.current = 0;
+    logWithTimestamp("✅ System stopped.");
+  }, [stopChangeDetection]);
 
   // Cleanup on unmount only
   useEffect(() => {
     return () => {
       // Only cleanup on unmount, not when dependencies change
-      if (visionRef.current) {
-        visionRef.current.stop().catch(() => {
-          // Ignore errors during cleanup
-        });
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
+      stop(); // Use the main stop function for cleanup
     };
-  }, []); // Empty dependency array - only run on mount/unmount
+  }, [stop]); // Dependency on stop ensures it has the latest callbacks
 
   return {
     isActive,
