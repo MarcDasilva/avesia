@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Nodes Visual Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: white;
+            padding: 20px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        .sidebar h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .node-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .create-btn {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            color: white;
+        }
+
+        .create-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .condition-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .listener-btn {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .event-btn {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+
+        .mode-section {
+            margin-bottom: 20px;
+        }
+
+        .mode-section h3 {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .mode-btn {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+
+        .mode-btn.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .action-btn {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .export-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .clear-btn {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        /* Canvas area */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        #canvas.grabbing {
+            cursor: grabbing;
+        }
+
+        /* Node styles */
+        .node {
+            position: absolute;
+            padding: 15px 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            cursor: move;
+            min-width: 150px;
+            transition: all 0.3s;
+            user-select: none;
+        }
+
+        .node:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+        }
+
+        .node.selected {
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.6);
+        }
+
+        .node.condition {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .node.listener {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .node.event {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: white;
+        }
+
+        .node-header {
+            font-weight: 600;
+            font-size: 12px;
+            opacity: 0.9;
+            margin-bottom: 5px;
+        }
+
+        .node-content {
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .node-input {
+            width: 100%;
+            padding: 6px;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.9);
+            color: #333;
+            font-size: 13px;
+        }
+
+        .node-id {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .delete-btn {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #ff6b6b;
+            color: white;
+            border: 2px solid white;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .node:hover .delete-btn {
+            display: flex;
+        }
+
+        /* Info panel */
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-size: 13px;
+            color: #666;
+        }
+
+        .info-panel strong {
+            color: #333;
+        }
+
+        /* SVG for arrows */
+        #arrow-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .arrow {
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#arrowhead);
+        }
+
+        .arrow.condition-listener {
+            stroke: #f5576c;
+        }
+
+        .arrow.listener-event {
+            stroke: #00f2fe;
+        }
+
+        /* Export modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+
+        .modal-content h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .modal-content pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+            max-height: 500px;
+        }
+
+        .modal-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .copy-btn {
+            background: #667eea;
+            color: white;
+        }
+
+        .close-btn {
+            background: #ddd;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <h2>Node Editor</h2>
+            
+            <div class="node-buttons">
+                <button class="create-btn condition-btn" onclick="createNode('condition')">
+                    + Create Condition
+                </button>
+                <button class="create-btn listener-btn" onclick="createNode('listener')">
+                    + Create Listener
+                </button>
+                <button class="create-btn event-btn" onclick="createNode('event')">
+                    + Create Event
+                </button>
+            </div>
+
+            <div class="mode-section">
+                <h3>Mode</h3>
+                <button class="mode-btn active" id="move-mode" onclick="setMode('move')">
+                    🖱️ Move Nodes
+                </button>
+            </div>
+
+            <div class="mode-section">
+                <h3>Link Nodes</h3>
+                <button class="mode-btn" id="link-condition-listener" onclick="setMode('link-condition-listener')">
+                    🔗 Condition → Listener
+                </button>
+                <button class="mode-btn" id="link-listener-event" onclick="setMode('link-listener-event')">
+                    🔗 Listener → Event
+                </button>
+            </div>
+
+            <div class="action-buttons">
+                <button class="action-btn export-btn" onclick="exportData()">
+                    ✓ Done - Export JSON
+                </button>
+                <button class="action-btn clear-btn" onclick="clearAll()">
+                    🗑️ Clear All
+                </button>
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="canvas-container">
+            <svg id="arrow-svg">
+                <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="currentColor" />
+                    </marker>
+                </defs>
+            </svg>
+            <div id="canvas"></div>
+            <div class="info-panel">
+                <div><strong>Instructions:</strong></div>
+                <div>1. Create nodes using sidebar buttons</div>
+                <div>2. Drag nodes to position them</div>
+                <div>3. Select link mode and click two nodes to connect</div>
+                <div>4. Click "Done" to export JSON</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div class="modal" id="export-modal">
+        <div class="modal-content">
+            <h2>Exported Node Data</h2>
+            <pre id="export-json"></pre>
+            <div class="modal-actions">
+                <button class="modal-btn copy-btn" onclick="copyToClipboard()">Copy to Clipboard</button>
+                <button class="modal-btn close-btn" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let nodes = {};
+        let connections = [];
+        let currentMode = 'move';
+        let selectedNode = null;
+        let draggedNode = null;
+        let dragOffset = { x: 0, y: 0 };
+        let nodeCounter = { condition: 0, listener: 0, event: 0 };
+        let canvasOffset = { x: 0, y: 0 };
+        let isPanning = false;
+        let panStart = { x: 0, y: 0 };
+
+        const canvas = document.getElementById('canvas');
+        const arrowSvg = document.getElementById('arrow-svg');
+
+        // Generate unique ID
+        function generateId(type) {
+            nodeCounter[type]++;
+            return `${type}_${nodeCounter[type]}_${Date.now().toString(36)}`;
+        }
+
+        // Create a new node
+        function createNode(type) {
+            const id = generateId(type);
+            const node = {
+                id: id,
+                type: type,
+                data: { name: `${type}_${nodeCounter[type]}` },
+                position: { x: 300 + Math.random() * 400, y: 200 + Math.random() * 300 },
+                connections: []
+            };
+
+            nodes[id] = node;
+            renderNode(node);
+            saveToLocalStorage();
+        }
+
+        // Render a node on canvas
+        function renderNode(node) {
+            const nodeEl = document.createElement('div');
+            nodeEl.className = `node ${node.type}`;
+            nodeEl.id = node.id;
+            nodeEl.style.left = node.position.x + 'px';
+            nodeEl.style.top = node.position.y + 'px';
+
+            nodeEl.innerHTML = `
+                <div class="node-header">${node.type.toUpperCase()}</div>
+                <div class="node-content">
+                    <input class="node-input" type="text" value="${node.data.name}" 
+                           onchange="updateNodeData('${node.id}', this.value)"
+                           onclick="event.stopPropagation()">
+                </div>
+                <div class="node-id">${node.id.substring(0, 20)}...</div>
+                <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
+            `;
+
+            nodeEl.addEventListener('mousedown', onNodeMouseDown);
+            nodeEl.addEventListener('click', onNodeClick);
+            
+            canvas.appendChild(nodeEl);
+        }
+
+        // Update node data
+        function updateNodeData(nodeId, newName) {
+            if (nodes[nodeId]) {
+                nodes[nodeId].data.name = newName;
+                saveToLocalStorage();
+            }
+        }
+
+        // Delete node
+        function deleteNode(nodeId) {
+            event.stopPropagation();
+            
+            // Remove connections
+            connections = connections.filter(conn => 
+                conn.from !== nodeId && conn.to !== nodeId
+            );
+            
+            // Remove from nodes object
+            delete nodes[nodeId];
+            
+            // Remove DOM element
+            const nodeEl = document.getElementById(nodeId);
+            if (nodeEl) {
+                nodeEl.remove();
+            }
+            
+            redrawArrows();
+            saveToLocalStorage();
+        }
+
+        // Node mouse down (for dragging)
+        function onNodeMouseDown(e) {
+            if (currentMode === 'move' && e.target.classList.contains('node')) {
+                draggedNode = e.target.id;
+                const node = nodes[draggedNode];
+                dragOffset = {
+                    x: e.clientX - node.position.x,
+                    y: e.clientY - node.position.y
+                };
+                e.preventDefault();
+            }
+        }
+
+        // Node click (for linking)
+        function onNodeClick(e) {
+            const nodeId = e.currentTarget.id;
+            const node = nodes[nodeId];
+
+            if (currentMode === 'link-condition-listener') {
+                if (!selectedNode) {
+                    if (node.type === 'condition') {
+                        selectedNode = nodeId;
+                        e.currentTarget.classList.add('selected');
+                    } else {
+                        alert('Please select a CONDITION node first');
+                    }
+                } else {
+                    if (node.type === 'listener') {
+                        createConnection(selectedNode, nodeId, 'condition-listener');
+                        document.getElementById(selectedNode).classList.remove('selected');
+                        selectedNode = null;
+                    } else {
+                        alert('Please select a LISTENER node second');
+                    }
+                }
+            } else if (currentMode === 'link-listener-event') {
+                if (!selectedNode) {
+                    if (node.type === 'listener') {
+                        selectedNode = nodeId;
+                        e.currentTarget.classList.add('selected');
+                    } else {
+                        alert('Please select a LISTENER node first');
+                    }
+                } else {
+                    if (node.type === 'event') {
+                        createConnection(selectedNode, nodeId, 'listener-event');
+                        document.getElementById(selectedNode).classList.remove('selected');
+                        selectedNode = null;
+                    } else {
+                        alert('Please select an EVENT node second');
+                    }
+                }
+            }
+        }
+
+        // Create connection between nodes
+        function createConnection(fromId, toId, connectionType) {
+            // Check if connection already exists
+            const exists = connections.some(conn => conn.from === fromId && conn.to === toId);
+            if (exists) {
+                alert('Connection already exists!');
+                return;
+            }
+
+            // For condition-listener, check if the condition already has a listener (each condition can only have ONE)
+            if (connectionType === 'condition-listener') {
+                const conditionHasListener = connections.some(conn => 
+                    conn.from === fromId && conn.type === 'condition-listener'
+                );
+                if (conditionHasListener) {
+                    alert('This condition already has a listener! Each condition can only be connected to ONE listener.');
+                    return;
+                }
+                // Note: Multiple conditions CAN link to the same listener (this is allowed)
+            }
+
+            connections.push({ from: fromId, to: toId, type: connectionType });
+            redrawArrows();
+            saveToLocalStorage();
+        }
+
+        // Draw arrows between connected nodes
+        function redrawArrows() {
+            arrowSvg.innerHTML = `
+                <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="currentColor" />
+                    </marker>
+                </defs>
+            `;
+
+            connections.forEach(conn => {
+                const fromNode = nodes[conn.from];
+                const toNode = nodes[conn.to];
+                
+                if (!fromNode || !toNode) return;
+
+                const fromEl = document.getElementById(conn.from);
+                const toEl = document.getElementById(conn.to);
+                
+                if (!fromEl || !toEl) return;
+
+                const fromRect = fromEl.getBoundingClientRect();
+                const toRect = toEl.getBoundingClientRect();
+                const canvasRect = canvas.getBoundingClientRect();
+
+                const x1 = fromRect.left + fromRect.width / 2 - canvasRect.left;
+                const y1 = fromRect.top + fromRect.height / 2 - canvasRect.top;
+                const x2 = toRect.left + toRect.width / 2 - canvasRect.left;
+                const y2 = toRect.top + toRect.height / 2 - canvasRect.top;
+
+                // Create curved path
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const controlX = midX - dy * 0.2;
+                const controlY = midY + dx * 0.2;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} Q ${controlX} ${controlY} ${x2} ${y2}`);
+                path.setAttribute('class', `arrow ${conn.type}`);
+                path.setAttribute('stroke', conn.type === 'condition-listener' ? '#f5576c' : '#00f2fe');
+                
+                arrowSvg.appendChild(path);
+            });
+        }
+
+        // Mouse move for dragging
+        document.addEventListener('mousemove', (e) => {
+            if (draggedNode && currentMode === 'move') {
+                const node = nodes[draggedNode];
+                node.position.x = e.clientX - dragOffset.x;
+                node.position.y = e.clientY - dragOffset.y;
+                
+                const nodeEl = document.getElementById(draggedNode);
+                nodeEl.style.left = node.position.x + 'px';
+                nodeEl.style.top = node.position.y + 'px';
+                
+                redrawArrows();
+            }
+        });
+
+        // Mouse up
+        document.addEventListener('mouseup', () => {
+            if (draggedNode) {
+                saveToLocalStorage();
+                draggedNode = null;
+            }
+        });
+
+        // Set mode
+        function setMode(mode) {
+            currentMode = mode;
+            
+            // Clear selected node
+            if (selectedNode) {
+                const nodeEl = document.getElementById(selectedNode);
+                if (nodeEl) nodeEl.classList.remove('selected');
+                selectedNode = null;
+            }
+            
+            // Update button states
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            const activeBtn = document.getElementById(mode) || document.getElementById('move-mode');
+            activeBtn.classList.add('active');
+        }
+
+        // Export data organized by events
+        function exportData() {
+            const exportData = {
+                events: [],
+                timestamp: new Date().toISOString(),
+                total_events: 0
+            };
+
+            // Get all event nodes
+            const eventNodes = Object.values(nodes).filter(n => n.type === 'event');
+            
+            eventNodes.forEach(eventNode => {
+                const eventData = {
+                    event_id: eventNode.id,
+                    event_data: eventNode.data,
+                    listeners: []
+                };
+
+                // Find all listeners connected to this event
+                const listenerConnections = connections.filter(
+                    conn => conn.to === eventNode.id && conn.type === 'listener-event'
+                );
+
+                listenerConnections.forEach(listenerConn => {
+                    const listenerNode = nodes[listenerConn.from];
+                    if (!listenerNode) return;
+
+                    const listenerData = {
+                        listener_id: listenerNode.id,
+                        listener_data: listenerNode.data,
+                        conditions: []
+                    };
+
+                    // Find all conditions connected to this listener
+                    const conditionConnections = connections.filter(
+                        conn => conn.to === listenerNode.id && conn.type === 'condition-listener'
+                    );
+
+                    conditionConnections.forEach(conditionConn => {
+                        const conditionNode = nodes[conditionConn.from];
+                        if (conditionNode) {
+                            listenerData.conditions.push({
+                                condition_id: conditionNode.id,
+                                condition_data: conditionNode.data
+                            });
+                        }
+                    });
+
+                    eventData.listeners.push(listenerData);
+                });
+
+                exportData.events.push(eventData);
+            });
+
+            exportData.total_events = exportData.events.length;
+
+            // Show modal with JSON
+            document.getElementById('export-json').textContent = JSON.stringify(exportData, null, 2);
+            document.getElementById('export-modal').classList.add('active');
+
+            // Also save to file
+            downloadJSON(exportData, 'node_export.json');
+        }
+
+        // Download JSON file
+        function downloadJSON(data, filename) {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Copy to clipboard
+        function copyToClipboard() {
+            const jsonText = document.getElementById('export-json').textContent;
+            navigator.clipboard.writeText(jsonText).then(() => {
+                alert('Copied to clipboard!');
+            });
+        }
+
+        // Close modal
+        function closeModal() {
+            document.getElementById('export-modal').classList.remove('active');
+        }
+
+        // Clear all nodes
+        function clearAll() {
+            if (confirm('Are you sure you want to clear all nodes?')) {
+                nodes = {};
+                connections = [];
+                nodeCounter = { condition: 0, listener: 0, event: 0 };
+                canvas.innerHTML = '';
+                redrawArrows();
+                saveToLocalStorage();
+            }
+        }
+
+        // Save to localStorage
+        function saveToLocalStorage() {
+            localStorage.setItem('userNodes', JSON.stringify({ nodes, connections, nodeCounter }));
+        }
+
+        // Load from localStorage
+        function loadFromLocalStorage() {
+            const saved = localStorage.getItem('userNodes');
+            if (saved) {
+                try {
+                    const data = JSON.parse(saved);
+                    nodes = data.nodes || {};
+                    connections = data.connections || [];
+                    nodeCounter = data.nodeCounter || { condition: 0, listener: 0, event: 0 };
+                    
+                    // Render all nodes
+                    Object.values(nodes).forEach(node => renderNode(node));
+                    redrawArrows();
+                } catch (e) {
+                    console.error('Error loading from localStorage:', e);
+                }
+            }
+        }
+
+        // Initialize
+        window.addEventListener('load', () => {
+            loadFromLocalStorage();
+        });
+
+        // Redraw arrows on window resize
+        window.addEventListener('resize', redrawArrows);
+    </script>
+</body>
+</html>
