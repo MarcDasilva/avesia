@@ -5,7 +5,6 @@ alerts/email_alerts_temp.json
 __pycache__/
 *.pyc
 *.pyo
-
 node_data/
 all_nodes_export.json
 processed_nodes_output.json
