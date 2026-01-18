@@ -24,7 +24,11 @@ from bson import ObjectId
 from bson.errors import InvalidId
 import cv2
 from PIL import Image
-from google import genai
+import sys
+
+# Add Nodes directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent / "Nodes"))
+from node_processing import process_listeners
 
 load_dotenv()
 
@@ -1209,103 +1213,12 @@ async def upload_project_thumbnail(
     }
 
 
-def nodes_to_prompt_description(nodes_data: Dict[str, Any]) -> str:
-    """
-    Convert nodes configuration to a natural language prompt description.
-    This description will be sent to Gemini to generate a vision processing prompt.
-    """
-    if not nodes_data or not nodes_data.get("listeners"):
-        return ""
-    
-    descriptions = []
-    for listener in nodes_data.get("listeners", []):
-        listener_data = listener.get("listener_data", {})
-        listener_type = listener_data.get("listener_type", "")
-        listener_desc = listener_data.get("description", "")
-        
-        # Build listener description
-        listener_text = f"Detect {listener_type}"
-        if listener_desc:
-            listener_text += f": {listener_desc}"
-        
-        # Add conditions
-        conditions = listener.get("conditions", [])
-        if conditions:
-            cond_texts = []
-            for cond in conditions:
-                cond_data = cond.get("condition_data", {})
-                cond_type = cond_data.get("condition_type", "")
-                cond_desc = cond_data.get("description", "")
-                cond_text = cond_type
-                if cond_desc:
-                    cond_text += f" ({cond_desc})"
-                cond_texts.append(cond_text)
-            listener_text += f" when {', '.join(cond_texts)}"
-        
-        descriptions.append(listener_text)
-    
-    return ". ".join(descriptions) + "." if descriptions else ""
-
-
-async def generate_prompt_with_gemini(nodes_description: str) -> str:
-    """
-    Use Gemini to enhance the nodes description into an optimal vision processing prompt.
-    """
-    if not nodes_description:
-        return "Analyze the video feed and detect any relevant objects or events."
-    
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    if not GEMINI_API_KEY:
-        # Fallback to simple prompt if Gemini not configured
-        return f"Monitor the video feed for: {nodes_description}"
-    
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        gemini_prompt = f"""Convert the following automation description into a clear, concise vision processing prompt for real-time video analysis.
-
-Automation Description:
-{nodes_description}
-
-Create a prompt that:
-1. Clearly states what to detect or monitor in the video
-2. Includes any conditions or constraints mentioned
-3. Is optimized for real-time vision AI processing
-4. Is concise and action-oriented
-
-Return ONLY the prompt text, no explanations or markdown."""
-
-        response = client.models.generate_content(
-            model='models/gemini-2.5-flash',
-            contents=gemini_prompt
-        )
-        
-        prompt = response.text.strip()
-        # Remove markdown code blocks if present
-        if prompt.startswith("```"):
-            prompt = prompt.split("```")[1]
-            if prompt.startswith("text"):
-                prompt = prompt[4:]
-            prompt = prompt.strip()
-        if prompt.endswith("```"):
-            prompt = prompt.rsplit("```", 1)[0].strip()
-        
-        return prompt
-    except Exception as e:
-        print(f"Warning: Failed to generate prompt with Gemini: {e}")
-        # Fallback to simple prompt
-        return f"Monitor the video feed for: {nodes_description}"
-
-
 @app.get("/api/projects/{project_id}/prompt")
 async def get_project_prompt(
     project_id: str,
     userId: str = Header(None, alias="X-User-Id")
 ):
-    """
-    Generate a vision processing prompt from project nodes using Gemini.
-    Returns the prompt that should be used for Overshoot vision processing.
-    """
+    """Generate a vision processing prompt from project nodes"""
     if not userId:
         raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
     
@@ -1328,20 +1241,81 @@ async def get_project_prompt(
         # Return default prompt if no nodes
         return {
             "prompt": "Analyze the video feed and detect any relevant objects or events.",
-            "hasNodes": False
+            "hasNodes": False,
+            "outputSchema": {},
+            "nodes": []
         }
     
-    # Convert nodes to description
-    nodes_description = nodes_to_prompt_description(nodes)
-    
-    # Generate enhanced prompt with Gemini
-    enhanced_prompt = await generate_prompt_with_gemini(nodes_description)
-    
-    return {
-        "prompt": enhanced_prompt,
-        "hasNodes": True,
-        "nodesDescription": nodes_description
-    }
+    try:
+        # Process listeners to create prompts
+        processed = process_listeners(nodes)
+        processed_nodes = processed.get("nodes", [])
+        
+        if not processed_nodes:
+            return {
+                "prompt": "Analyze the video feed and detect any relevant objects or events.",
+                "hasNodes": False,
+                "outputSchema": {},
+                "nodes": []
+            }
+        
+        # Create combined prompt from processed nodes
+        prompt_parts = []
+        for node in processed_nodes:
+            node_prompt = node.get("prompt", "").strip()
+            if node_prompt:
+                prompt_parts.append(node_prompt)
+        
+        # Combine prompts - use natural language joining for better readability
+        # If multiple listeners, join with "Also" for natural flow
+        if len(prompt_parts) > 1:
+            combined_prompt = prompt_parts[0]
+            for prompt in prompt_parts[1:]:
+                combined_prompt += f". Also, {prompt}"
+        elif len(prompt_parts) == 1:
+            combined_prompt = prompt_parts[0]
+        else:
+            combined_prompt = "Analyze the video feed and detect any relevant objects or events."
+        
+        # Debug: Log the final prompt being sent to Overshoot
+        print(f"🎯 Final combined prompt for project {project_id}: {combined_prompt}")
+        print(f"📋 Number of nodes: {len(processed_nodes)}")
+        
+        # Create output schema from processed nodes
+        output_schema = {
+            "type": "object",
+            "properties": {}
+        }
+        for node in processed_nodes:
+            node_name = node.get("name", f"node_{len(output_schema['properties'])}")
+            datatype = node.get("datatype", "boolean")
+            # Map datatype to JSON schema type
+            schema_type = {
+                "boolean": "boolean",
+                "integer": "integer",
+                "number": "number",
+                "string": "string"
+            }.get(datatype, "boolean")
+            output_schema["properties"][node_name] = {"type": schema_type}
+        
+        return {
+            "prompt": combined_prompt,
+            "hasNodes": True,
+            "nodes": processed_nodes,
+            "outputSchema": output_schema
+        }
+    except Exception as e:
+        print(f"Error processing nodes to prompt: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return default prompt on error
+        return {
+            "prompt": "Analyze the video feed and detect any relevant objects or events.",
+            "hasNodes": False,
+            "error": str(e),
+            "outputSchema": {},
+            "nodes": []
+        }
 
 
 @app.put("/api/projects/{project_id}/nodes")
