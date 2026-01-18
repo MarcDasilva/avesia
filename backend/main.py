@@ -24,6 +24,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 import cv2
 from PIL import Image
+from google import genai
 
 load_dotenv()
 
@@ -1205,6 +1206,141 @@ async def upload_project_thumbnail(
         "thumbnailPath": str(thumbnail_path),
         "thumbnailFilename": thumbnail_filename,
         "message": "Thumbnail uploaded successfully"
+    }
+
+
+def nodes_to_prompt_description(nodes_data: Dict[str, Any]) -> str:
+    """
+    Convert nodes configuration to a natural language prompt description.
+    This description will be sent to Gemini to generate a vision processing prompt.
+    """
+    if not nodes_data or not nodes_data.get("listeners"):
+        return ""
+    
+    descriptions = []
+    for listener in nodes_data.get("listeners", []):
+        listener_data = listener.get("listener_data", {})
+        listener_type = listener_data.get("listener_type", "")
+        listener_desc = listener_data.get("description", "")
+        
+        # Build listener description
+        listener_text = f"Detect {listener_type}"
+        if listener_desc:
+            listener_text += f": {listener_desc}"
+        
+        # Add conditions
+        conditions = listener.get("conditions", [])
+        if conditions:
+            cond_texts = []
+            for cond in conditions:
+                cond_data = cond.get("condition_data", {})
+                cond_type = cond_data.get("condition_type", "")
+                cond_desc = cond_data.get("description", "")
+                cond_text = cond_type
+                if cond_desc:
+                    cond_text += f" ({cond_desc})"
+                cond_texts.append(cond_text)
+            listener_text += f" when {', '.join(cond_texts)}"
+        
+        descriptions.append(listener_text)
+    
+    return ". ".join(descriptions) + "." if descriptions else ""
+
+
+async def generate_prompt_with_gemini(nodes_description: str) -> str:
+    """
+    Use Gemini to enhance the nodes description into an optimal vision processing prompt.
+    """
+    if not nodes_description:
+        return "Analyze the video feed and detect any relevant objects or events."
+    
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        # Fallback to simple prompt if Gemini not configured
+        return f"Monitor the video feed for: {nodes_description}"
+    
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        gemini_prompt = f"""Convert the following automation description into a clear, concise vision processing prompt for real-time video analysis.
+
+Automation Description:
+{nodes_description}
+
+Create a prompt that:
+1. Clearly states what to detect or monitor in the video
+2. Includes any conditions or constraints mentioned
+3. Is optimized for real-time vision AI processing
+4. Is concise and action-oriented
+
+Return ONLY the prompt text, no explanations or markdown."""
+
+        response = client.models.generate_content(
+            model='models/gemini-2.5-flash',
+            contents=gemini_prompt
+        )
+        
+        prompt = response.text.strip()
+        # Remove markdown code blocks if present
+        if prompt.startswith("```"):
+            prompt = prompt.split("```")[1]
+            if prompt.startswith("text"):
+                prompt = prompt[4:]
+            prompt = prompt.strip()
+        if prompt.endswith("```"):
+            prompt = prompt.rsplit("```", 1)[0].strip()
+        
+        return prompt
+    except Exception as e:
+        print(f"Warning: Failed to generate prompt with Gemini: {e}")
+        # Fallback to simple prompt
+        return f"Monitor the video feed for: {nodes_description}"
+
+
+@app.get("/api/projects/{project_id}/prompt")
+async def get_project_prompt(
+    project_id: str,
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """
+    Generate a vision processing prompt from project nodes using Gemini.
+    Returns the prompt that should be used for Overshoot vision processing.
+    """
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get nodes from project
+    nodes = project.get("nodes")
+    if not nodes or not nodes.get("listeners"):
+        # Return default prompt if no nodes
+        return {
+            "prompt": "Analyze the video feed and detect any relevant objects or events.",
+            "hasNodes": False
+        }
+    
+    # Convert nodes to description
+    nodes_description = nodes_to_prompt_description(nodes)
+    
+    # Generate enhanced prompt with Gemini
+    enhanced_prompt = await generate_prompt_with_gemini(nodes_description)
+    
+    return {
+        "prompt": enhanced_prompt,
+        "hasNodes": True,
+        "nodesDescription": nodes_description
     }
 
 
