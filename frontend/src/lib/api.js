@@ -385,4 +385,20 @@ export const overshootAPI = {
 
     return await response.json();
   },
+
+  // Parse natural language prompt into nodes using AI
+  async parsePrompt(prompt) {
+    const response = await fetch(`${API_BASE_URL}/nodes/parse-prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to parse prompt");
+    }
+
+    return await response.json();
+  },
 };
