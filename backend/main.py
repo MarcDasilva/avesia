@@ -59,6 +59,9 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 THUMBNAILS_DIR = Path("thumbnails")
 THUMBNAILS_DIR.mkdir(exist_ok=True)
 
+CLIPS_DIR = Path("clips")
+CLIPS_DIR.mkdir(exist_ok=True)
+
 # MongoDB connection
 try:
     # Validate connection string format
@@ -110,6 +113,12 @@ results_store: List[dict] = []
 email_rate_limit: Dict[str, Dict[str, float]] = {}
 EMAIL_RATE_LIMIT_SECONDS = 120  # 2 minutes
 
+# Rate limiting for clip saving: track last clip saved time per listener per project
+# Format: {project_id: {listener_id: timestamp}}
+# This prevents duplicate clips by limiting to once every 5 seconds per listener
+clip_rate_limit: Dict[str, Dict[str, float]] = {}
+CLIP_RATE_LIMIT_SECONDS = 5  # 5 seconds - prevents rapid duplicate saves
+
 # Store nodes configuration
 nodes_store: List[dict] = []
 
@@ -143,6 +152,7 @@ class Result(BaseModel):
     prompt: str
     node_id: Optional[str] = None
     project_id: Optional[str] = None  # CRITICAL: Track which project this result is from
+    video_id: Optional[str] = None  # Track which video is being processed
 
 
 class PromptUpdate(BaseModel):
@@ -466,12 +476,106 @@ async def receive_result(result: Result):
                 # Check if value is True (boolean) or "true" (string)
                 if value is True or (isinstance(value, str) and value.lower() == "true"):
                     print(f"✅ Trigger detected for listener: {listener_id}")
+                    print(f"📋 Debug - video_id: {result.video_id}, project_id: {result.project_id}")
                     
-                    # CRITICAL: Check rate limit before sending email
-                    # Only send if 2 minutes have passed since last email for this listener
                     project_id_str = result.project_id
                     current_time = datetime.now().timestamp()
                     
+                    # CRITICAL: Save video clip for ANY detected event (not just email events)
+                    # This works for prerecorded videos (video_id provided) or live footage (clip uploaded separately)
+                    # BUT: Only save once per event to prevent duplicates (rate limit check)
+                    print(f"🔍 DEBUG: Event detected - video_id={result.video_id}, project_id={result.project_id}, listener_id={listener_id}")
+                    
+                    # Check rate limit for clip saving to prevent duplicates
+                    clip_saved = False
+                    if result.video_id:
+                        # Initialize project in rate limit dict if needed
+                        if project_id_str not in clip_rate_limit:
+                            clip_rate_limit[project_id_str] = {}
+                        
+                        # Check if we've saved a clip recently for this listener
+                        last_clip_time = clip_rate_limit[project_id_str].get(listener_id, 0)
+                        time_since_last_clip = current_time - last_clip_time
+                        
+                        if time_since_last_clip < CLIP_RATE_LIMIT_SECONDS:
+                            time_remaining = CLIP_RATE_LIMIT_SECONDS - time_since_last_clip
+                            print(f"⏱️ Clip rate limit active for listener {listener_id}: {time_remaining:.1f}s remaining before next clip")
+                        else:
+                            # Rate limit passed - proceed with clip extraction
+                            print(f"✅ Clip rate limit passed for listener {listener_id} - proceeding with clip extraction")
+                            
+                            try:
+                                project_object_id = ObjectId(result.project_id)
+                                project = db.projects.find_one({"_id": project_object_id})
+                                
+                                if not project:
+                                    print(f"⚠️ Project {result.project_id} not found in database")
+                                else:
+                                    videos = project.get("videos", [])
+                                    print(f"🔍 DEBUG: Project has {len(videos)} video(s)")
+                                    video = next((v for v in videos if v.get("id") == result.video_id), None)
+                                    
+                                    if not video:
+                                        print(f"⚠️ Video {result.video_id} not found in project. Available IDs: {[v.get('id') for v in videos]}")
+                                    elif not video.get("filepath"):
+                                        print(f"⚠️ Video {result.video_id} has no filepath")
+                                    else:
+                                        video_path = Path(video["filepath"])
+                                        print(f"🔍 DEBUG: Video filepath: {video_path}")
+                                        
+                                        if not video_path.exists():
+                                            print(f"⚠️ Video file does not exist: {video_path}")
+                                        else:
+                                            print(f"📹 Extracting last 5 seconds of video {result.video_id} for event")
+                                            
+                                            # Generate unique filename for clip
+                                            clip_uuid = str(uuid.uuid4())
+                                            clip_filename = f"{clip_uuid}.mp4"
+                                            clip_path = CLIPS_DIR / clip_filename
+                                            
+                                            # Ensure clips directory exists
+                                            CLIPS_DIR.mkdir(exist_ok=True)
+                                            
+                                            # Extract last 5 seconds
+                                            extracted_path = extract_last_n_seconds(
+                                                video_path, 
+                                                clip_path, 
+                                                seconds=5
+                                            )
+                                            
+                                            if not extracted_path:
+                                                print(f"⚠️ Failed to extract video clip - extract_last_n_seconds returned None")
+                                            else:
+                                                print(f"✅ Clip extracted: {extracted_path}")
+                                                event_type = "event_trigger"
+                                                
+                                                # Save clip to database with event timestamp (from when event was detected)
+                                                clip_id = await save_video_clip_to_database(
+                                                    project_id=result.project_id,
+                                                    listener_id=listener_id,
+                                                    event_timestamp=result.timestamp,  # Use event timestamp, not current time
+                                                    video_id=result.video_id,
+                                                    clip_file_path=extracted_path,
+                                                    event_type=event_type,
+                                                )
+                                                
+                                                if clip_id:
+                                                    print(f"✅ Video clip saved to database: {clip_id} for project {result.project_id} at timestamp {result.timestamp}")
+                                                    clip_saved = True
+                                                    # Update rate limit timestamp after successful save
+                                                    clip_rate_limit[project_id_str][listener_id] = current_time
+                                                    print(f"⏱️ Clip rate limit updated: next clip for {listener_id} can be saved in {CLIP_RATE_LIMIT_SECONDS}s")
+                                                else:
+                                                    print(f"⚠️ save_video_clip_to_database returned None")
+                            except Exception as e:
+                                print(f"❌ Error extracting/saving video clip: {e}")
+                                import traceback
+                                traceback.print_exc()
+                    else:
+                        print(f"⚠️ No video_id provided - cannot extract clip for prerecorded video")
+                    
+                    # CRITICAL: Check rate limit before sending email
+                    # Only send if 2 minutes have passed since last email for this listener
                     # Initialize project in rate limit dict if needed
                     if project_id_str not in email_rate_limit:
                         email_rate_limit[project_id_str] = {}
@@ -483,7 +587,7 @@ async def receive_result(result: Result):
                     if time_since_last_email < EMAIL_RATE_LIMIT_SECONDS:
                         time_remaining = EMAIL_RATE_LIMIT_SECONDS - time_since_last_email
                         print(f"⏱️ Rate limit active for listener {listener_id}: {int(time_remaining)}s remaining before next email")
-                        continue  # Skip this trigger - rate limit active
+                        continue  # Skip email, but clip was already saved above
                     
                     # Rate limit passed - proceed with email
                     print(f"✅ Rate limit passed for listener {listener_id} - proceeding with email")
@@ -606,6 +710,27 @@ This email was sent automatically. Please do not reply."""
                                                 # CRITICAL: Update rate limit timestamp after successful send
                                                 email_rate_limit[project_id_str][listener_id] = current_time
                                                 print(f"⏱️ Rate limit updated: next email for {listener_id} can be sent in {EMAIL_RATE_LIMIT_SECONDS}s")
+                                                
+                                                # Update clip event type to email_alert if clip was already saved
+                                                # (Video clips are saved for ANY event above, but we update type for email events)
+                                                if result.video_id and db:
+                                                    try:
+                                                        # Find and update the most recent clip for this event
+                                                        db.video_clips.update_one(
+                                                            {
+                                                                "projectId": result.project_id,
+                                                                "listenerId": listener_id,
+                                                                "eventTimestamp": result.timestamp,
+                                                            },
+                                                            {
+                                                                "$set": {
+                                                                    "eventType": "email_alert",
+                                                                    "emailSentTo": email,
+                                                                }
+                                                            }
+                                                        )
+                                                    except Exception as e:
+                                                        print(f"⚠️ Could not update clip event type: {e}")
                                             else:
                                                 print(f"❌ Failed to send email: {email_result.get('error')}")
                                         else:
@@ -1067,6 +1192,235 @@ def generate_thumbnail(video_path: Path, thumbnail_path: Path, thumbnail_size: t
         return False
 
 
+async def save_video_clip_to_database(
+    project_id: str,
+    listener_id: str,
+    event_timestamp: str,
+    video_id: Optional[str] = None,
+    clip_file_path: Optional[Path] = None,
+    clip_blob: Optional[bytes] = None,
+    event_type: str = "event_trigger",
+    email_sent_to: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Save a video clip to the database.
+    Can handle either a file path (for prerecorded videos) or blob data (for live footage).
+    
+    Returns the clip ID if successful, None otherwise.
+    """
+    try:
+        if db is None:
+            print("⚠️ MongoDB not available, cannot save clip to database")
+            return None
+        
+        # If we have blob data, save it to a file first
+        if clip_blob:
+            clip_uuid = str(uuid.uuid4())
+            clip_filename = f"{clip_uuid}.mp4"
+            clip_path = CLIPS_DIR / clip_filename
+            
+            # Ensure clips directory exists
+            CLIPS_DIR.mkdir(exist_ok=True)
+            
+            # Write blob to file
+            with open(clip_path, "wb") as f:
+                f.write(clip_blob)
+            
+            clip_file_path = clip_path
+        
+        # If we have a file path but no UUID yet, generate one
+        if clip_file_path and not clip_file_path.stem:
+            clip_uuid = str(uuid.uuid4())
+            clip_filename = f"{clip_uuid}.mp4"
+            new_clip_path = CLIPS_DIR / clip_filename
+            clip_file_path.rename(new_clip_path)
+            clip_file_path = new_clip_path
+            clip_filename = clip_uuid
+        elif clip_file_path:
+            clip_uuid = clip_file_path.stem
+            clip_filename = f"{clip_uuid}.mp4"
+        else:
+            print("⚠️ No clip file path or blob provided")
+            return None
+        
+        # Save clip metadata to database
+        clip_metadata = {
+            "id": clip_uuid,
+            "projectId": project_id,
+            "listenerId": listener_id,
+            "eventTimestamp": event_timestamp,
+            "clipPath": str(clip_file_path),
+            "clipFilename": clip_filename,
+            "durationSeconds": 5,
+            "createdAt": datetime.utcnow(),
+            "eventType": event_type,
+        }
+        
+        if video_id:
+            clip_metadata["videoId"] = video_id
+        
+        if email_sent_to:
+            clip_metadata["emailSentTo"] = email_sent_to
+        
+        db.video_clips.insert_one(clip_metadata)
+        print(f"✅ Video clip saved to database: {clip_uuid}")
+        return clip_uuid
+        
+    except Exception as e:
+        print(f"❌ Error saving video clip to database: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def extract_last_n_seconds(video_path: Path, output_path: Path, seconds: int = 5) -> Optional[Path]:
+    """
+    Extract the last N seconds of a video file.
+    
+    Args:
+        video_path: Path to input video file
+        output_path: Path to save the output clip
+        seconds: Number of seconds to extract from the end (default: 5)
+    
+    Returns:
+        Path to the output clip if successful, None otherwise
+    """
+    cap = None
+    out = None
+    try:
+        # Ensure video path is absolute
+        video_path = video_path.resolve()
+        output_path = output_path.resolve()
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        print(f"🔍 DEBUG: Extracting from {video_path} to {output_path}")
+        
+        # Open video file
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            print(f"❌ Error: Could not open video file {video_path}")
+            return None
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        print(f"🔍 DEBUG: Video properties - fps={fps}, frames={frame_count}, width={width}, height={height}")
+        
+        if fps == 0 or frame_count == 0:
+            print(f"❌ Error: Invalid video properties (fps={fps}, frames={frame_count})")
+            return None
+        
+        # Calculate start frame (last N seconds)
+        total_duration = frame_count / fps
+        start_time = max(0, total_duration - seconds)
+        start_frame = int(start_time * fps)
+        
+        # If video is shorter than requested seconds, extract from beginning
+        if start_frame < 0:
+            start_frame = 0
+        
+        print(f"🔍 DEBUG: Extracting from frame {start_frame} (time {start_time:.2f}s) to end")
+        
+        # Try multiple codecs - mp4v may not work on all systems
+        codecs = ['mp4v', 'XVID', 'avc1']
+        fourcc = None
+        out = None
+        
+        for codec in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                # Use .mp4 extension for mp4v/avc1, .avi for XVID
+                if codec == 'XVID':
+                    output_path_alt = output_path.with_suffix('.avi')
+                else:
+                    output_path_alt = output_path
+                
+                out = cv2.VideoWriter(str(output_path_alt), fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"✅ Using codec {codec} for output")
+                    output_path = output_path_alt
+                    break
+                else:
+                    if out:
+                        out.release()
+                    out = None
+            except Exception as e:
+                print(f"⚠️ Codec {codec} failed: {e}")
+                if out:
+                    out.release()
+                    out = None
+                continue
+        
+        if not out or not out.isOpened():
+            print(f"❌ Error: Could not create VideoWriter with any codec")
+            return None
+        
+        # Seek to start frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        
+        # Read and write frames
+        frames_written = 0
+        max_frames = int(seconds * fps) + 10  # Add buffer
+        
+        while frames_written < max_frames:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+            
+            # Ensure frame dimensions match
+            if frame.shape[0] != height or frame.shape[1] != width:
+                frame = cv2.resize(frame, (width, height))
+            
+            out.write(frame)
+            frames_written += 1
+        
+        print(f"🔍 DEBUG: Wrote {frames_written} frames")
+        
+        # Explicitly release everything
+        cap.release()
+        out.release()
+        
+        # Wait a moment for file system to flush
+        import time
+        time.sleep(0.1)
+        
+        # Verify output file was created
+        if output_path.exists():
+            file_size = output_path.stat().st_size
+            if file_size > 0:
+                print(f"✅ Extracted last {seconds} seconds ({frames_written} frames, {file_size} bytes) to {output_path}")
+                return output_path
+            else:
+                print(f"❌ Error: Output file exists but is empty ({file_size} bytes)")
+        else:
+            print(f"❌ Error: Output file was not created at {output_path}")
+        
+        return None
+            
+    except Exception as e:
+        print(f"❌ Error extracting video clip: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        # Ensure cleanup
+        if cap:
+            try:
+                cap.release()
+            except:
+                pass
+        if out:
+            try:
+                out.release()
+            except:
+                pass
+
+
 @app.post("/api/projects/{project_id}/videos")
 async def upload_video(
     project_id: str,
@@ -1206,6 +1560,60 @@ async def get_video_file(
     # Explicitly set CORS headers to ensure they're present
     # This helps with fetch() requests from the frontend
     # Get origin from request, or use configured frontend_url
+    origin = request.headers.get("origin") or frontend_url
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
+
+
+@app.get("/api/projects/{project_id}/clips/{clip_id}/file")
+async def get_clip_file(
+    project_id: str,
+    clip_id: str,
+    request: Request,
+    userId: Optional[str] = Header(None, alias="X-User-Id"),
+    userId_query: Optional[str] = Query(None, alias="userId")
+):
+    """Serve a video clip file for a project"""
+    # Accept userId from either header or query parameter
+    userId = userId or userId_query
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Find clip in database
+    clip = db.video_clips.find_one({"id": clip_id, "projectId": project_id})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    
+    clip_path = Path(clip.get("clipPath", ""))
+    if not clip_path.exists():
+        raise HTTPException(status_code=404, detail="Clip file not found on server")
+    
+    # Create FileResponse with CORS headers
+    response = FileResponse(
+        str(clip_path),
+        media_type="video/mp4",
+        filename=clip.get("clipFilename", "clip.mp4")
+    )
+    
+    # Explicitly set CORS headers
     origin = request.headers.get("origin") or frontend_url
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
@@ -1516,6 +1924,74 @@ async def save_project_nodes(
         "success": True,
         "message": "Nodes saved successfully",
         "nodes": nodes_data
+    }
+
+
+@app.get("/api/projects/{project_id}/analytics")
+async def get_project_analytics(
+    project_id: str,
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Get analytics/events history for a project"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Fetch events from video_clips collection for this project
+    events = []
+    try:
+        # Get video clips (all event types - email alerts, event triggers, etc.)
+        clips = db.video_clips.find({"projectId": project_id}).sort("createdAt", -1)
+        for clip in clips:
+            event_type = clip.get("eventType", "event_trigger")
+            listener_id = clip.get("listenerId", "unknown")
+            email_sent_to = clip.get("emailSentTo")
+            
+            # Create description based on event type
+            if event_type == "email_alert" and email_sent_to:
+                description = f"Email alert sent to {email_sent_to} for listener {listener_id}"
+            elif event_type == "event_trigger":
+                description = f"Event triggered for listener {listener_id}"
+            else:
+                description = f"Event occurred for listener {listener_id}"
+            
+            events.append({
+                "id": clip.get("id"),
+                "type": event_type,  # Use actual event type, not hardcoded "email_alert"
+                "eventType": event_type,
+                "timestamp": clip.get("eventTimestamp"),
+                "createdAt": clip.get("createdAt"),
+                "listenerId": listener_id,
+                "videoId": clip.get("videoId"),
+                "emailSentTo": email_sent_to,
+                "description": description,
+                "clipId": clip.get("id"),  # Include clip ID for frontend to access clip file
+                "clipFilename": clip.get("clipFilename"),  # Include filename for reference
+            })
+    except Exception as e:
+        print(f"Error fetching video clips: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Sort all events by timestamp (most recent first)
+    events.sort(key=lambda x: x.get("timestamp") or x.get("createdAt") or "", reverse=True)
+    
+    return {
+        "success": True,
+        "events": events,
+        "count": len(events)
     }
 
 
