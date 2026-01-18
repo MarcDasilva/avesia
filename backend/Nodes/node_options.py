@@ -12,7 +12,7 @@ class ConditionOptions:
         "zone",
         "duration",
         "frequency",
-        "custom"
+        "custom",
     ]
 
 
@@ -22,18 +22,28 @@ class ListenerOptions:
         "object (person, car, animal, package)",
         "activity (walking, running, fighting)",
         "motion",
-        "sound (glass break, alarm)",
         "face (known / unknown)",
         "license_plate",
         "gesture (hands up, waving)",
         "custom_prompt (natural language)",
-        "custom"
+        "custom",
     ]
 
 
 class EventOptions:
     """Available event type options (if needed in the future)"""
     OPTIONS = [
-        "Email",
-        "Text"
+        "Email", "Text", "Emergency"
+    ]
+
+
+class AccessoryOptions:
+    """Available accessory type options"""
+    OPTIONS = [
+        "Smart Light Bulb",
+        "Smart Plug",
+        "Motion Sensor",
+        "Smart Switch",
+        "Smart Lock",
+        "Smart Thermostat",
     ]

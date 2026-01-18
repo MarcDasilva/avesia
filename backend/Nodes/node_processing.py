@@ -27,34 +27,30 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
     for listener in listeners_json.get("listeners", []):
         listener_id = listener.get("listener_id", "")
         listener_data = listener.get("listener_data", {})
-        conditions = listener.get("conditions", [])
         
         # Extract goal from listener
-        listener_name = listener_data.get("name", "detection")
-        listener_type = listener_data.get("type", "")
+        listener_type = listener_data.get("listener_type", "")
+        listener_description = listener_data.get("description", "")
         
-        goal = f"{listener_name}"
-        if listener_type:
-            goal += f" ({listener_type})"
+        goal = f"{listener_type} detection"
+        if listener_description:
+            goal += f" - {listener_description}"
         
         # Extract constraints from conditions
         constraints = []
-        for condition in conditions:
+        for condition in listener.get("conditions", []):
             cond_data = condition.get("condition_data", {})
-            cond_name = cond_data.get("name", "")
-            cond_threshold = cond_data.get("threshold")
-            cond_type = cond_data.get("type", "")
+            cond_type = cond_data.get("condition_type", "")
+            cond_description = cond_data.get("description", "")
             
             constraint_parts = []
-            if cond_name:
-                constraint_parts.append(cond_name)
-            if cond_threshold is not None:
-                constraint_parts.append(f"threshold: {cond_threshold}")
             if cond_type:
-                constraint_parts.append(f"type: {cond_type}")
+                constraint_parts.append(cond_type)
+            if cond_description is not None:
+                constraint_parts.append(f"description: {cond_description}")
             
             if constraint_parts:
-                constraints.append(", ".join(constraint_parts))
+                constraints.append(" - ".join(constraint_parts))
         
         # Build the prompt string
         if constraints:
@@ -74,34 +70,76 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
 if __name__ == "__main__":
     # Test with sample data
     sample_json = {
-  "listeners": [
-    {
-      "listener_id": "74a5b922-120f-4ab3-9711-1340fa17b91a",
-      "listener_data": {
-        "name": "package_detection",
-        "type": "object (person, car, animal, package)"
-      },
-      "conditions": [
-        {
-          "condition_id": "e613e065-2a3a-4c68-8507-4324a2445e7f",
-          "condition_data": {
-            "name": "front_door_zone",
-            "type": "zone"
+    "listeners": [
+      {
+        "listener_id": "node_1768723871133_3",
+        "listener_data": {
+          "name": "listener_3",
+          "listener_type": "license_plate",
+          "description": "description\n"
+        },
+        "listener_position": {
+          "x": 450,
+          "y": 100
+        },
+        "conditions": [
+          {
+            "condition_id": "node_1768723848167_2",
+            "condition_data": {
+              "name": "condition_2",
+              "condition_type": "time",
+              "description": "hello jeremy\n"
+            },
+            "position": {
+              "x": 183.47733639910302,
+              "y": 47.46574210112318
+            }
+          },
+          {
+            "condition_id": "node_1768724109001_6",
+            "condition_data": {
+              "name": "condition_6",
+              "condition_type": "custom",
+              "description": "description"
+            },
+            "position": {
+              "x": 250,
+              "y": 250
+            }
           }
-        }
-      ],
-      "events": [
-        {
-          "event_id": "b147eb0d-3a85-456d-98be-ba015eeaf524",
-          "event_data": {
-            "action": "send_notification",
-            "type": "Text",
-            "message": "Package delivered to front door"
+        ],
+        "events": [
+          {
+            "event_id": "node_1768723882700_5",
+            "event_data": {
+              "name": "event_node_1768723882700_5",
+              "event_type": "Gmail",
+              "action": "notification",
+              "message": "",
+              "description": "description"
+            },
+            "position": {
+              "x": 652.1236595027013,
+              "y": 26.733747156803474
+            }
+          },
+          {
+            "event_id": "node_1768723876433_4",
+            "event_data": {
+              "name": "event_node_1768723876433_4",
+              "event_type": "Text",
+              "action": "notification",
+              "message": "",
+              "description": "description\n"
+            },
+            "position": {
+              "x": 650,
+              "y": 250
+            }
           }
-        }
-      ]
-    }
-  ],
+        ]
+      }
+    ],
   "total_listeners": 1
 }
     
