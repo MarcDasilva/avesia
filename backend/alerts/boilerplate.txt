@@ -1,0 +1,18 @@
+Hello,
+
+This is an automated message from **Avesia** regarding your camera automation.
+
+An event or workflow you configured has been triggered. No action is required unless otherwise noted.
+------------------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------------------
+
+If this message requires your attention, please review the details in your Avesia dashboard.
+
+If you believe you received this message in error, you can safely ignore it.
+
+—
+Avesia
+Camera Automation Platform
+This email was sent automatically. Please do not reply.

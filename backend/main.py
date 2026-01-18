@@ -114,6 +114,12 @@ OVERSHOOT_API_URL = os.getenv("OVERSHOOT_API_URL", "https://cluster1.overshoot.a
 # Store results in memory (consider using a database for production)
 results_store: List[dict] = []
 
+# Rate limiting for email alerts: track last email sent time per listener per project
+# Format: {project_id: {listener_id: timestamp}}
+# This prevents spam by limiting emails to once every 2 minutes per listener
+email_rate_limit: Dict[str, Dict[str, float]] = {}
+EMAIL_RATE_LIMIT_SECONDS = 120  # 2 minutes
+
 # Store nodes configuration
 nodes_store: List[dict] = []
 
@@ -146,6 +152,7 @@ class Result(BaseModel):
     timestamp: str
     prompt: str
     node_id: Optional[str] = None
+    project_id: Optional[str] = None  # CRITICAL: Track which project this result is from
 
 
 class PromptUpdate(BaseModel):
@@ -427,9 +434,11 @@ async def api_health_check():
 @app.post("/api/results")
 async def receive_result(result: Result):
     """
-    Receive results from Node.js Overshoot service
-    This endpoint is called by the Node.js service when vision detects something
+    Receive results from Overshoot SDK
+    This endpoint is called when vision detects something
     Results can be plain text or JSON (if using structured output)
+    
+    CRITICAL: If result contains 'true' values, triggers email alerts based on project nodes
     """
     # Try to parse as JSON if possible (for structured output)
     parsed_result = None
@@ -447,6 +456,7 @@ async def receive_result(result: Result):
         "timestamp": result.timestamp,
         "prompt": result.prompt,
         "node_id": result.node_id,
+        "project_id": result.project_id,  # Store project ID
         "is_json": is_json,
         "received_at": datetime.now().isoformat()
     }
@@ -457,24 +467,174 @@ async def receive_result(result: Result):
     if len(results_store) > 100:
         results_store.pop(0)
     
-    # Print result in a clear format (only if verbose logging is enabled)
-    # Commented out for performance - uncomment if you need detailed logging
-    # print("\n" + "="*60)
-    # print(f"📹 RESULT RECEIVED - {result_data['received_at']}")
-    # print(f"🔍 Prompt: {result.prompt}")
-    # if result.node_id:
-    #     print(f"🆔 Node ID: {result.node_id}")
-    # print(f"📝 Result ({'JSON' if is_json else 'Text'}):")
-    # print("-"*60)
-    # if is_json:
-    #     print(json.dumps(parsed_result, indent=2))
-    # else:
-    #     print(result.result)
-    # print("="*60 + "\n")
+    # CRITICAL: Check for 'true' values and trigger email alerts
+    # Only process if we have a project_id and JSON result
+    if result.project_id and is_json and isinstance(parsed_result, dict):
+        try:
+            # Check each field in the result for 'true' values
+            for listener_id, value in parsed_result.items():
+                # Check if value is True (boolean) or "true" (string)
+                if value is True or (isinstance(value, str) and value.lower() == "true"):
+                    print(f"✅ Trigger detected for listener: {listener_id}")
+                    
+                    # CRITICAL: Check rate limit before sending email
+                    # Only send if 2 minutes have passed since last email for this listener
+                    project_id_str = result.project_id
+                    current_time = datetime.now().timestamp()
+                    
+                    # Initialize project in rate limit dict if needed
+                    if project_id_str not in email_rate_limit:
+                        email_rate_limit[project_id_str] = {}
+                    
+                    # Check if we've sent an email recently for this listener
+                    last_email_time = email_rate_limit[project_id_str].get(listener_id, 0)
+                    time_since_last_email = current_time - last_email_time
+                    
+                    if time_since_last_email < EMAIL_RATE_LIMIT_SECONDS:
+                        time_remaining = EMAIL_RATE_LIMIT_SECONDS - time_since_last_email
+                        print(f"⏱️ Rate limit active for listener {listener_id}: {int(time_remaining)}s remaining before next email")
+                        continue  # Skip this trigger - rate limit active
+                    
+                    # Rate limit passed - proceed with email
+                    print(f"✅ Rate limit passed for listener {listener_id} - proceeding with email")
+                    
+                    # Find project and get nodes
+                    try:
+                        project_object_id = ObjectId(result.project_id)
+                        project = db.projects.find_one({"_id": project_object_id})
+                        
+                        if not project or not project.get("nodes"):
+                            print(f"⚠️ Project {result.project_id} not found or has no nodes")
+                            continue
+                        
+                        # Find the listener and its associated email events
+                        nodes = project.get("nodes", {})
+                        listeners = nodes.get("listeners", [])
+                        
+                        for listener in listeners:
+                            if listener.get("listener_id") == listener_id:
+                                # Found the listener - check for email events
+                                events = listener.get("events", [])
+                                
+                                email_sent = False  # Track if we actually sent an email
+                                
+                                for event in events:
+                                    event_data = event.get("event_data", {})
+                                    event_type = event_data.get("event_type", "").lower()
+                                    
+                                    # Check if this is an email event (Gmail or Email)
+                                    if event_type in ["gmail", "email"]:
+                                        # Extract email and message from event_data
+                                        # Email is stored as "recipient" for Email events, or "email" for Gmail
+                                        email = event_data.get("recipient", "") or event_data.get("email", "")
+                                        message = event_data.get("message", "")
+                                        description = event_data.get("description", "")
+                                        
+                                        # Use description as message if message is empty
+                                        if not message and description:
+                                            message = description
+                                        
+                                        # If still no message, use a default
+                                        if not message:
+                                            listener_name = listener.get("listener_data", {}).get("name", listener_id)
+                                            message = f"Alert triggered for {listener_name}"
+                                        
+                                        # Only send if we have an email address
+                                        if email:
+                                            print(f"📧 Sending email alert to {email} for listener {listener_id}")
+                                            
+                                            # Import email alert function
+                                            from alerts.email_alert import send_email
+                                            
+                                            # Get listener name for subject
+                                            listener_name = listener.get("listener_data", {}).get("name", "Detection")
+                                            
+                                            # Get project name for email
+                                            project_name = project.get("name", "Unknown Project")
+                                            
+                                            # Format email message using boilerplate template
+                                            # Read boilerplate template
+                                            boilerplate_path = Path(__file__).parent / "alerts" / "boilerplate.txt"
+                                            try:
+                                                with open(boilerplate_path, "r", encoding="utf-8") as f:
+                                                    boilerplate_template = f.read()
+                                            except Exception as e:
+                                                print(f"⚠️ Could not read boilerplate template: {e}")
+                                                # Fallback template
+                                                boilerplate_template = """Hello,
+
+This is an automated message from **Avesia** regarding your camera automation.
+
+An event or workflow you configured has been triggered. No action is required unless otherwise noted.
+------------------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------------------
+
+If this message requires your attention, please review the details in your Avesia dashboard.
+
+If you believe you received this message in error, you can safely ignore it.
+
+—
+Avesia
+Camera Automation Platform
+This email was sent automatically. Please do not reply."""
+                                            
+                                            # Replace the custom message section (between dashes) with the actual message
+                                            # Format: "Automated message from {project}: {message}"
+                                            project_message = f"Automated message from {project_name}: {message}"
+                                            
+                                            # Split template by dashes and insert custom message
+                                            parts = boilerplate_template.split("------------------------------------------------------------------------------------------")
+                                            if len(parts) >= 3:
+                                                # Reconstruct with custom message in the middle
+                                                formatted_message = (
+                                                    parts[0] +
+                                                    "------------------------------------------------------------------------------------------\n\n" +
+                                                    project_message +
+                                                    "\n\n------------------------------------------------------------------------------------------" +
+                                                    parts[2]
+                                                )
+                                            else:
+                                                # Fallback if template format is unexpected
+                                                formatted_message = boilerplate_template.replace(
+                                                    "------------------------------------------------------------------------------------------\n\n\n------------------------------------------------------------------------------------------",
+                                                    f"------------------------------------------------------------------------------------------\n\n{project_message}\n\n------------------------------------------------------------------------------------------"
+                                                )
+                                            
+                                            # Send email with formatted message
+                                            email_result = send_email(
+                                                recipient_email=email,
+                                                subject=f"Alert: {listener_name}",
+                                                message=formatted_message
+                                            )
+                                            
+                                            if email_result.get("success"):
+                                                print(f"✅ Email sent successfully to {email}")
+                                                email_sent = True
+                                                
+                                                # CRITICAL: Update rate limit timestamp after successful send
+                                                email_rate_limit[project_id_str][listener_id] = current_time
+                                                print(f"⏱️ Rate limit updated: next email for {listener_id} can be sent in {EMAIL_RATE_LIMIT_SECONDS}s")
+                                            else:
+                                                print(f"❌ Failed to send email: {email_result.get('error')}")
+                                        else:
+                                            print(f"⚠️ Email event found but no email address configured for listener {listener_id}")
+                                
+                                # Only break if we found the listener (email sent or no email configured)
+                                break  # Found the listener, no need to continue
+                    
+                    except (InvalidId, ValueError) as e:
+                        print(f"⚠️ Invalid project ID: {result.project_id} - {e}")
+                    except Exception as e:
+                        print(f"❌ Error processing alert for listener {listener_id}: {e}")
+        
+        except Exception as e:
+            print(f"❌ Error checking for triggers: {e}")
     
     # Quick log for performance
     if is_json:
-        print(f"📹 Result: {len(parsed_result)} fields")
+        print(f"📹 Result: {len(parsed_result) if isinstance(parsed_result, dict) else 1} fields")
     else:
         print(f"📹 Result received")
     
@@ -1051,9 +1211,9 @@ async def upload_video(
     
     # Update project: add video and update thumbnail if this is the first video
     update_data = {
-        "$push": {"videos": video_data},
-        "$set": {"updatedAt": datetime.utcnow()}
-    }
+            "$push": {"videos": video_data},
+            "$set": {"updatedAt": datetime.utcnow()}
+        }
     
     # If project doesn't have a thumbnail yet, set it from this video
     if thumbnail_generated and not project.get("thumbnailPath"):
