@@ -1,4 +1,8 @@
 .env
 .venv
 node_modules/
+alerts/email_alerts_temp.json
+__pycache__/
+*.pyc
+*.pyo
 node_data/
