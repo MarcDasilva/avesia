@@ -9,6 +9,7 @@ import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
 import "./MagicBento.css";
 import { useOvershootVision } from "../hooks/useOvershootVision";
+import { useOvershootVideoFile } from "../hooks/useOvershootVideoFile";
 import {
   Dialog,
   DialogContent,
@@ -73,9 +74,8 @@ export function ProjectView({ project, onBack }) {
   const [isLoadingVideos, setIsLoadingVideos] = useState(true);
   const fileInputRef = useRef(null);
   const videoRefs = useRef({}); // Refs for video elements to control playback
-  const blobUrlsRef = useRef([]); // Track blob URLs for cleanup
 
-  // Overshoot SDK integration
+  // Overshoot SDK integration for camera
   const {
     isActive: isOvershootActive,
     isConnecting: isOvershootConnecting,
@@ -93,6 +93,15 @@ export function ProjectView({ project, onBack }) {
       console.error("Overshoot error in ProjectView:", error);
     },
   });
+
+  // Overshoot SDK integration for video files
+  const {
+    isProcessing: isProcessingVideos,
+    error: videoProcessingError,
+    processVideoFile,
+    stopAll: stopAllVideoProcessing,
+    cleanup: cleanupVideoProcessing,
+  } = useOvershootVideoFile();
 
   const onConnect = useCallback(
     (params) => {
@@ -181,7 +190,7 @@ export function ProjectView({ project, onBack }) {
         // Small delay to ensure MongoDB update is committed
         await new Promise((resolve) => setTimeout(resolve, 100));
 
-        // Reload videos from backend to get the new video with proper blob URL
+        // Reload videos from backend to get the new video with direct streaming URL
         const projectData = await projectsAPI.getById(project.id);
         console.log("Project data after upload:", projectData);
         console.log("Does projectData have videos?", "videos" in projectData);
@@ -193,25 +202,39 @@ export function ProjectView({ project, onBack }) {
           projectVideos
         );
 
-        // Convert backend video data to frontend format with blob URLs
+        // Convert backend video data to frontend format with direct streaming URLs (YouTube-style)
+        const { supabase } = await import("../lib/supabase.js");
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
         const loadedVideos = await Promise.all(
           projectVideos.map(async (video) => {
             try {
-              // Fetch video as blob with authentication and create blob URL
-              const blobUrl = await projectsAPI.getVideoBlobUrl(
+              if (!session?.user?.id) {
+                throw new Error("Unauthorized: User ID required");
+              }
+
+              // Use direct URL with query param for authentication (YouTube-style streaming)
+              const videoUrl = `${projectsAPI.getVideoUrl(
                 project.id,
                 video.id
+              )}?userId=${session.user.id}`;
+
+              console.log(
+                `Using direct streaming URL for ${video.id}:`,
+                videoUrl
               );
-              blobUrlsRef.current.push(blobUrl);
+
               return {
                 type: "file",
-                url: blobUrl,
+                url: videoUrl,
                 name: video.filename,
                 videoId: video.id,
               };
             } catch (error) {
               console.error(`Error loading video ${video.id}:`, error);
-              // Fallback to regular URL if blob fetch fails
+              // Fallback to regular URL if auth fails
               return {
                 type: "file",
                 url: projectsAPI.getVideoUrl(project.id, video.id),
@@ -289,13 +312,7 @@ export function ProjectView({ project, onBack }) {
     const loadVideos = async () => {
       setIsLoadingVideos(true);
 
-      // Cleanup previous blob URLs
-      blobUrlsRef.current.forEach((url) => {
-        if (url.startsWith("blob:")) {
-          URL.revokeObjectURL(url);
-        }
-      });
-      blobUrlsRef.current = [];
+      // No blob URL cleanup needed - using direct streaming URLs now
 
       try {
         console.log("Loading videos for project:", project.id);
@@ -315,51 +332,42 @@ export function ProjectView({ project, onBack }) {
           return;
         }
 
-        // Convert backend video data to frontend format with blob URLs
+        // Convert backend video data to frontend format with direct streaming URLs (YouTube-style)
         // Filter out videos that can't be loaded (e.g., missing files)
         const loadedVideosResults = await Promise.allSettled(
           projectVideos.map(async (video) => {
             try {
               console.log(`Loading video: ${video.id} - ${video.filename}`);
-              // Fetch video as blob with authentication and create blob URL
-              const blobUrl = await projectsAPI.getVideoBlobUrl(
+
+              // Get session for authentication
+              const { supabase } = await import("../lib/supabase.js");
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+
+              if (!session?.user?.id) {
+                throw new Error("Unauthorized: User ID required");
+              }
+
+              // Use direct URL with query param for authentication (YouTube-style streaming)
+              const videoUrl = `${projectsAPI.getVideoUrl(
                 project.id,
                 video.id
+              )}?userId=${session.user.id}`;
+
+              console.log(
+                `Using direct streaming URL for ${video.id}:`,
+                videoUrl
               );
-              console.log(`Video blob URL created for ${video.id}:`, blobUrl);
-              blobUrlsRef.current.push(blobUrl);
+
               return {
                 type: "file",
-                url: blobUrl,
+                url: videoUrl,
                 name: video.filename,
                 videoId: video.id,
               };
             } catch (error) {
-              console.error(`Error loading video ${video.id} as blob:`, error);
-              // Try using direct URL with authentication token in query param as fallback
-              try {
-                const { supabase } = await import("../lib/supabase.js");
-                const {
-                  data: { session },
-                } = await supabase.auth.getSession();
-
-                if (session?.user?.id) {
-                  // Add user ID as query param for authentication
-                  const videoUrl = `${projectsAPI.getVideoUrl(
-                    project.id,
-                    video.id
-                  )}?userId=${session.user.id}`;
-                  console.log(`Using fallback URL for ${video.id}:`, videoUrl);
-                  return {
-                    type: "file",
-                    url: videoUrl,
-                    name: video.filename,
-                    videoId: video.id,
-                  };
-                }
-              } catch (fallbackError) {
-                console.error(`Error creating fallback URL:`, fallbackError);
-              }
+              console.error(`Error loading video ${video.id}:`, error);
 
               // If video file doesn't exist (404), throw error to filter it out
               if (
@@ -369,13 +377,7 @@ export function ProjectView({ project, onBack }) {
                 throw new Error(`Video file not found: ${video.filename}`);
               }
 
-              // Last resort: regular URL (may fail due to auth, but worth trying)
-              return {
-                type: "file",
-                url: projectsAPI.getVideoUrl(project.id, video.id),
-                name: video.filename,
-                videoId: video.id,
-              };
+              throw error;
             }
           })
         );
@@ -399,16 +401,109 @@ export function ProjectView({ project, onBack }) {
       loadVideos();
     }
 
-    // Cleanup blob URLs on unmount or when project changes
-    return () => {
-      blobUrlsRef.current.forEach((url) => {
-        if (url.startsWith("blob:")) {
-          URL.revokeObjectURL(url);
-        }
-      });
-      blobUrlsRef.current = [];
-    };
+    // No cleanup needed - using direct streaming URLs now
   }, [project.id]);
+
+  // Track which videos have been processed to avoid re-processing
+  const processedVideoIdsRef = useRef(new Set());
+
+  // Process videos with Overshoot SDK when they're loaded
+  useEffect(() => {
+    const processVideosWithOvershoot = async () => {
+      // Only process file videos (not overshoot camera feeds)
+      const fileVideos = videos.filter(
+        (video) => video.type === "file" && video.videoId
+      );
+
+      if (fileVideos.length === 0) {
+        return;
+      }
+
+      // Filter out videos that have already been processed
+      const videosToProcess = fileVideos.filter(
+        (video) => !processedVideoIdsRef.current.has(video.videoId)
+      );
+
+      if (videosToProcess.length === 0) {
+        return; // All videos already processed
+      }
+
+      console.log(
+        `Processing ${videosToProcess.length} new video(s) with Overshoot SDK...`
+      );
+
+      // Process each video with Overshoot SDK
+      for (const video of videosToProcess) {
+        try {
+          console.log(
+            `[${video.name}] Fetching video file for Overshoot processing...`
+          );
+
+          // Get session for authentication
+          const { supabase } = await import("../lib/supabase.js");
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+
+          if (!session?.user?.id) {
+            console.warn(
+              `[${video.name}] Skipping Overshoot processing: Unauthorized`
+            );
+            continue;
+          }
+
+          // Fetch the video as a blob
+          const videoUrl = `${projectsAPI.getVideoUrl(
+            project.id,
+            video.videoId
+          )}?userId=${session.user.id}`;
+          const response = await fetch(videoUrl);
+
+          if (!response.ok) {
+            console.error(
+              `[${video.name}] Failed to fetch video for processing: ${response.statusText}`
+            );
+            continue;
+          }
+
+          const blob = await response.blob();
+
+          // Convert blob to File object (Overshoot SDK expects File)
+          // Extract filename from video name or use a default
+          const filename = video.name || `video-${video.videoId}.mp4`;
+          const videoFile = new File([blob], filename, {
+            type: blob.type || "video/mp4",
+          });
+
+          console.log(`[${video.name}] Starting Overshoot processing...`);
+
+          // Mark video as being processed
+          processedVideoIdsRef.current.add(video.videoId);
+
+          // Process video file with Overshoot SDK (non-blocking)
+          processVideoFile(videoFile, video.videoId, video.name).catch(
+            (error) => {
+              console.error(
+                `[${video.name}] Error processing video with Overshoot:`,
+                error
+              );
+              // Remove from processed set on error so it can be retried
+              processedVideoIdsRef.current.delete(video.videoId);
+            }
+          );
+        } catch (error) {
+          console.error(
+            `[${video.name}] Error setting up Overshoot processing:`,
+            error
+          );
+        }
+      }
+    };
+
+    if (videos.length > 0 && !isLoadingVideos) {
+      processVideosWithOvershoot();
+    }
+  }, [videos, isLoadingVideos, project.id, processVideoFile]);
 
   // Function to play video with fallback to muted if needed
   const playVideoWithFallback = async (videoElement) => {
@@ -428,16 +523,18 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
-  // Cleanup webcam on unmount
+  // Cleanup webcam and video processing on unmount
   useEffect(() => {
     return () => {
       if (webcamStream) {
         webcamStream.getTracks().forEach((track) => track.stop());
       }
+      // Cleanup video file processing
+      cleanupVideoProcessing();
       // Note: We don't need to revoke URLs for backend videos
       // Only revoke blob URLs if we add any
     };
-  }, [webcamStream]);
+  }, [webcamStream, cleanupVideoProcessing]);
 
   return (
     <div className="flex flex-col h-full w-full">

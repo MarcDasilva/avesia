@@ -267,7 +267,9 @@ export const overshootAPI = {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch Overshoot config: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch Overshoot config: ${response.statusText}`
+      );
     }
 
     return await response.json();
