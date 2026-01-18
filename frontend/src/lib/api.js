@@ -164,6 +164,44 @@ export const projectsAPI = {
     return `${API_BASE_URL}/projects/${projectId}/videos/${videoId}/file`;
   },
 
+  // Get project thumbnail URL
+  getThumbnailUrl(projectId) {
+    return `${API_BASE_URL}/projects/${projectId}/thumbnail`;
+  },
+
+  // Upload a thumbnail image for a project
+  async uploadThumbnail(projectId, file) {
+    const { supabase } = await import("./supabase.js");
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized: User ID required");
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/thumbnail`,
+      {
+        method: "POST",
+        headers: {
+          "X-User-Id": session.user.id,
+        },
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to upload thumbnail");
+    }
+
+    return await response.json();
+  },
+
   // Get video file as blob URL (with authentication)
   async getVideoBlobUrl(projectId, videoId) {
     const { supabase } = await import("./supabase.js");
@@ -191,6 +229,26 @@ export const projectsAPI = {
 
     const blob = await response.blob();
     return URL.createObjectURL(blob);
+  },
+
+  // Save nodes configuration for a project
+  async saveNodes(projectId, nodesData) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/nodes`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(nodesData),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to save nodes");
+    }
+
+    return await response.json();
   },
 };
 

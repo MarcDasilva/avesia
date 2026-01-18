@@ -16,11 +16,14 @@ import asyncio
 import shutil
 import uuid
 from pathlib import Path
+from io import BytesIO
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from bson import ObjectId
 from bson.errors import InvalidId
+import cv2
+from PIL import Image
 
 load_dotenv()
 
@@ -47,6 +50,9 @@ DATABASE_NAME = os.getenv("DATABASE_NAME", "avesia")
 # ============================================================================
 UPLOADS_DIR = Path("uploads")
 UPLOADS_DIR.mkdir(exist_ok=True)
+
+THUMBNAILS_DIR = Path("thumbnails")
+THUMBNAILS_DIR.mkdir(exist_ok=True)
 
 # MongoDB connection
 try:
@@ -151,6 +157,7 @@ class Project(BaseModel):
     userId: str
     name: str
     videos: List[Dict[str, Any]] = Field(default_factory=list)
+    nodes: Optional[Dict[str, Any]] = Field(default=None)  # UserNodes configuration
     createdAt: datetime
     updatedAt: datetime
 
@@ -693,6 +700,8 @@ async def get_projects(userId: str = Header(None, alias="X-User-Id")):
             "id": str(project["_id"]),
             "userId": project["userId"],
             "name": project["name"],
+            "thumbnailPath": project.get("thumbnailPath"),
+            "thumbnailFilename": project.get("thumbnailFilename"),
             "createdAt": project["createdAt"],
             "updatedAt": project["updatedAt"],
         })
@@ -716,6 +725,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
         "userId": userId,
         "name": project_data.name.strip(),
         "videos": [],  # Initialize videos array
+        "nodes": None,  # Initialize nodes configuration
         "createdAt": now,
         "updatedAt": now,
     }
@@ -728,6 +738,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
         "userId": project["userId"],
         "name": project["name"],
         "videos": project.get("videos", []),
+        "nodes": project.get("nodes"),  # Include nodes in response
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -752,6 +763,7 @@ async def get_project(project_id: str, userId: str = Header(None, alias="X-User-
         raise HTTPException(status_code=404, detail="Project not found")
     
     videos = project.get("videos", [])
+    nodes = project.get("nodes")  # Get nodes configuration
     # Debug logging
     print(f"DEBUG: Project {project_id} has {len(videos)} videos")
     print(f"DEBUG: Videos field exists: {'videos' in project}")
@@ -762,6 +774,9 @@ async def get_project(project_id: str, userId: str = Header(None, alias="X-User-
         "userId": project["userId"],
         "name": project["name"],
         "videos": videos,
+        "nodes": nodes,  # Include nodes in response
+        "thumbnailPath": project.get("thumbnailPath"),
+        "thumbnailFilename": project.get("thumbnailFilename"),
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -835,6 +850,58 @@ async def delete_project(project_id: str, userId: str = Header(None, alias="X-Us
     return {"message": "Project deleted successfully"}
 
 
+def generate_thumbnail(video_path: Path, thumbnail_path: Path, thumbnail_size: tuple = (640, 360)) -> bool:
+    """Generate a thumbnail from a video file"""
+    try:
+        # Open video file
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return False
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Capture frame at 10% of video duration (or first frame if video is too short)
+        target_frame = max(1, int(frame_count * 0.1))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        
+        # Read frame
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret or frame is None:
+            # Fallback to first frame
+            cap = cv2.VideoCapture(str(video_path))
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                return False
+        
+        # Convert BGR to RGB (OpenCV uses BGR, PIL uses RGB)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Convert to PIL Image
+        pil_image = Image.fromarray(frame_rgb)
+        
+        # Resize to thumbnail size while maintaining aspect ratio
+        pil_image.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
+        
+        # Create a new image with the desired size and paste the resized image
+        thumbnail = Image.new('RGB', thumbnail_size, (0, 0, 0))
+        img_width, img_height = pil_image.size
+        x_offset = (thumbnail_size[0] - img_width) // 2
+        y_offset = (thumbnail_size[1] - img_height) // 2
+        thumbnail.paste(pil_image, (x_offset, y_offset))
+        
+        # Save thumbnail
+        thumbnail.save(thumbnail_path, 'JPEG', quality=85)
+        return True
+    except Exception as e:
+        print(f"Error generating thumbnail: {e}")
+        return False
+
+
 @app.post("/api/projects/{project_id}/videos")
 async def upload_video(
     project_id: str,
@@ -864,7 +931,8 @@ async def upload_video(
     
     # Generate unique filename
     file_extension = Path(file.filename).suffix
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    video_uuid = str(uuid.uuid4())
+    unique_filename = f"{video_uuid}{file_extension}"
     file_path = UPLOADS_DIR / unique_filename
     
     # Save file to disk
@@ -874,22 +942,45 @@ async def upload_video(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
     
+    # Generate thumbnail
+    thumbnail_filename = f"{video_uuid}.jpg"
+    thumbnail_path = THUMBNAILS_DIR / thumbnail_filename
+    thumbnail_generated = False
+    
+    try:
+        thumbnail_generated = generate_thumbnail(file_path, thumbnail_path)
+    except Exception as e:
+        print(f"Warning: Failed to generate thumbnail: {e}")
+    
     # Create video metadata
     video_data = {
-        "id": str(uuid.uuid4()),
+        "id": video_uuid,
         "filename": file.filename,
         "filepath": str(file_path),
         "contentType": file.content_type,
         "uploadedAt": datetime.utcnow(),
     }
     
+    # Add thumbnail path if generated
+    if thumbnail_generated:
+        video_data["thumbnailPath"] = str(thumbnail_path)
+        video_data["thumbnailFilename"] = thumbnail_filename
+    
+    # Update project: add video and update thumbnail if this is the first video
+    update_data = {
+        "$push": {"videos": video_data},
+        "$set": {"updatedAt": datetime.utcnow()}
+    }
+    
+    # If project doesn't have a thumbnail yet, set it from this video
+    if thumbnail_generated and not project.get("thumbnailPath"):
+        update_data["$set"]["thumbnailPath"] = str(thumbnail_path)
+        update_data["$set"]["thumbnailFilename"] = thumbnail_filename
+    
     # Add video to project
     db.projects.update_one(
         {"_id": object_id, "userId": userId},
-        {
-            "$push": {"videos": video_data},
-            "$set": {"updatedAt": datetime.utcnow()}
-        }
+        update_data
     )
     
     # Refetch the project to ensure we have the latest data with the new video
@@ -958,6 +1049,204 @@ async def get_video_file(
     response.headers["Access-Control-Allow-Headers"] = "*"
     
     return response
+
+
+@app.get("/api/projects/{project_id}/thumbnail")
+async def get_project_thumbnail(
+    project_id: str,
+    request: Request,
+    userId: Optional[str] = Header(None, alias="X-User-Id"),
+    userId_query: Optional[str] = Query(None, alias="userId")
+):
+    """Serve a thumbnail image for a project"""
+    # Accept userId from either header or query parameter
+    userId = userId or userId_query
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check if project has a thumbnail
+    thumbnail_path = project.get("thumbnailPath")
+    thumbnail_filename = project.get("thumbnailFilename")
+    
+    if not thumbnail_path or not thumbnail_filename:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    
+    # Verify file exists
+    file_path = Path(thumbnail_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail file not found")
+    
+    response = FileResponse(
+        str(file_path),
+        media_type="image/jpeg",
+        filename=thumbnail_filename
+    )
+    
+    # Set CORS headers
+    origin = request.headers.get("origin") or frontend_url
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
+
+
+@app.post("/api/projects/{project_id}/thumbnail")
+async def upload_project_thumbnail(
+    project_id: str,
+    file: UploadFile = File(...),
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Upload a thumbnail image for a project"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    # Validate file is an image
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Generate unique filename
+    file_extension = Path(file.filename).suffix
+    # Only allow image extensions
+    if file_extension.lower() not in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+        file_extension = '.jpg'
+    
+    thumbnail_uuid = str(uuid.uuid4())
+    thumbnail_filename = f"{thumbnail_uuid}.jpg"
+    thumbnail_path = THUMBNAILS_DIR / thumbnail_filename
+    
+    # Save file to disk
+    try:
+        # Read file content into memory
+        file_content = await file.read()
+        
+        # Open image from bytes
+        image = Image.open(BytesIO(file_content))
+        
+        # Convert RGBA to RGB if necessary (remove alpha channel)
+        if image.mode in ('RGBA', 'LA', 'P'):
+            # Create white background
+            rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+            if image.mode == 'P':
+                image = image.convert('RGBA')
+            rgb_image.paste(image, mask=image.split()[-1] if image.mode in ('RGBA', 'LA') else None)
+            image = rgb_image
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Resize to standard thumbnail size (640x360) while maintaining aspect ratio
+        image.thumbnail((640, 360), Image.Resampling.LANCZOS)
+        
+        # Create a new image with the desired size and paste the resized image
+        thumbnail = Image.new('RGB', (640, 360), (0, 0, 0))
+        img_width, img_height = image.size
+        x_offset = (640 - img_width) // 2
+        y_offset = (360 - img_height) // 2
+        thumbnail.paste(image, (x_offset, y_offset))
+        
+        # Save as JPEG
+        thumbnail.save(thumbnail_path, 'JPEG', quality=85)
+        
+        # If there's an old thumbnail, optionally delete it (or keep for history)
+        old_thumbnail_path = project.get("thumbnailPath")
+        if old_thumbnail_path:
+            old_path = Path(old_thumbnail_path)
+            if old_path.exists() and old_path != thumbnail_path:
+                try:
+                    old_path.unlink()
+                except Exception as e:
+                    print(f"Warning: Failed to delete old thumbnail: {e}")
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process image: {str(e)}")
+    
+    # Update project with new thumbnail
+    db.projects.update_one(
+        {"_id": object_id, "userId": userId},
+        {
+            "$set": {
+                "thumbnailPath": str(thumbnail_path),
+                "thumbnailFilename": thumbnail_filename,
+                "updatedAt": datetime.utcnow()
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "thumbnailPath": str(thumbnail_path),
+        "thumbnailFilename": thumbnail_filename,
+        "message": "Thumbnail uploaded successfully"
+    }
+
+
+@app.put("/api/projects/{project_id}/nodes")
+async def save_project_nodes(
+    project_id: str,
+    nodes_data: Dict[str, Any],
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Save nodes configuration for a project"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Update project with nodes configuration
+    db.projects.update_one(
+        {"_id": object_id, "userId": userId},
+        {
+            "$set": {
+                "nodes": nodes_data,
+                "updatedAt": datetime.utcnow()
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "message": "Nodes saved successfully",
+        "nodes": nodes_data
+    }
 
 
 # ============================================================================

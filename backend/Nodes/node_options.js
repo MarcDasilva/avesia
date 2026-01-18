@@ -24,4 +24,4 @@ const ListenerOptions = [
   "custom",
 ];
 
-const EventOptions = ["Gmail", "Text"];
+const EventOptions = ["Email", "Text"];

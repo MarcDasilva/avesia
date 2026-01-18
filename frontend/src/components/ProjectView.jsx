@@ -29,6 +29,23 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { projectsAPI } from "../lib/api";
+import {
+  ConditionNode,
+  ListenerNode,
+  EventNode,
+  AccessoryNode,
+} from "./nodeComponents";
+import {
+  ConditionOptions,
+  ListenerOptions,
+  EventOptions,
+  AccessoryOptions,
+} from "../lib/nodeOptions";
+import {
+  canConnectNodes,
+  reactFlowToUserNodes,
+  userNodesToReactFlow,
+} from "../lib/nodeUtils";
 
 // Custom node component
 const CustomNode = ({ data, selected }) => {
@@ -47,16 +64,8 @@ const CustomNode = ({ data, selected }) => {
   );
 };
 
-// Initial nodes and edges
-const initialNodes = [
-  {
-    id: "1",
-    type: "custom",
-    position: { x: 250, y: 100 },
-    data: { label: "Start Node", description: "Flow entry point" },
-  },
-];
-
+// Initial nodes and edges (empty - will load from MongoDB)
+const initialNodes = [];
 const initialEdges = [];
 
 export function ProjectView({ project, onBack }) {
@@ -103,8 +112,90 @@ export function ProjectView({ project, onBack }) {
     cleanup: cleanupVideoProcessing,
   } = useOvershootVideoFile();
 
+  // Handle node type change from dropdown
+  const handleNodeTypeChange = useCallback((nodeId, newType) => {
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === nodeId) {
+          const updatedData = { ...node.data };
+          // Use the correct field name based on node type
+          if (node.type === "condition") {
+            updatedData.condition_type = newType;
+          } else if (node.type === "listener") {
+            updatedData.listener_type = newType;
+          } else if (node.type === "event") {
+            updatedData.event_type = newType;
+          }
+          return {
+            ...node,
+            data: updatedData,
+          };
+        }
+        return node;
+      })
+    );
+  }, []);
+
+  // Handle node description change
+  const handleNodeDescriptionChange = useCallback((nodeId, newDescription) => {
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === nodeId) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              description: newDescription,
+            },
+          };
+        }
+        return node;
+      })
+    );
+  }, []);
+
+  // Handle event config change (for Email, Text, Emergency)
+  const handleEventConfigChange = useCallback((nodeId, config) => {
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === nodeId) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              ...config,
+            },
+          };
+        }
+        return node;
+      })
+    );
+  }, []);
+
   const onConnect = useCallback(
     (params) => {
+      // Validate connection based on node types
+      const sourceNode = nodes.find((n) => n.id === params.source);
+      const targetNode = nodes.find((n) => n.id === params.target);
+
+      if (sourceNode && targetNode) {
+        if (!canConnectNodes(sourceNode, targetNode)) {
+          alert(
+            `Invalid connection: ${sourceNode.type} cannot connect to ${targetNode.type}. Only Condition→Listener, Listener→Event, and Listener→Accessory are allowed.`
+          );
+          return;
+        }
+
+        // Additional validation: Condition can only connect to ONE listener
+        if (sourceNode.type === "condition") {
+          const existingEdges = edges.filter((e) => e.source === params.source);
+          if (existingEdges.length > 0) {
+            alert("Condition can only be connected to one Listener.");
+            return;
+          }
+        }
+      }
+
       setEdges((eds) =>
         addEdge(
           {
@@ -118,7 +209,7 @@ export function ProjectView({ project, onBack }) {
         )
       );
     },
-    [setEdges]
+    [nodes, edges, setEdges]
   );
 
   const onDragOver = useCallback((event) => {
@@ -143,30 +234,111 @@ export function ProjectView({ project, onBack }) {
         y: event.clientY - reactFlowBounds.top,
       };
 
-      const newNode = {
-        id: `${nodeId}`,
-        type: "custom",
-        position,
-        data: {
-          label: `Node ${nodeId}`,
-          description: "Custom node",
-        },
-      };
+      // Generate unique ID for new node
+      const newNodeId = `node_${Date.now()}_${nodeId}`;
+
+      // Create node based on type (matching HTML structure)
+      let newNode;
+      if (type === "condition") {
+        newNode = {
+          id: newNodeId,
+          type: "condition",
+          position,
+          data: {
+            name: `condition_${nodeId}`,
+            condition_type: ConditionOptions[0] || "custom",
+            description: "",
+            onTypeChange: handleNodeTypeChange,
+            onDescriptionChange: handleNodeDescriptionChange,
+          },
+        };
+      } else if (type === "listener") {
+        newNode = {
+          id: newNodeId,
+          type: "listener",
+          position,
+          data: {
+            name: `listener_${nodeId}`,
+            listener_type: ListenerOptions[0] || "custom",
+            description: "",
+            onTypeChange: handleNodeTypeChange,
+            onDescriptionChange: handleNodeDescriptionChange,
+          },
+        };
+      } else if (type === "event") {
+        newNode = {
+          id: newNodeId,
+          type: "event",
+          position,
+          data: {
+            name: `event_${nodeId}`,
+            event_type: EventOptions[0] || "Text",
+            recipient: "",
+            number: "",
+            message: "",
+            onTypeChange: handleNodeTypeChange,
+            onConfigChange: handleEventConfigChange,
+          },
+        };
+      } else if (type === "accessory") {
+        newNode = {
+          id: newNodeId,
+          type: "accessory",
+          position,
+          data: {
+            name: `accessory_${nodeId}`,
+            accessory_type: AccessoryOptions[0] || "Smart Light Bulb",
+            onTypeChange: handleNodeTypeChange,
+          },
+        };
+      } else {
+        // Fallback for custom node type
+        newNode = {
+          id: newNodeId,
+          type: "custom",
+          position,
+          data: {
+            label: `Node ${nodeId}`,
+            description: "Custom node",
+          },
+        };
+      }
 
       setNodes((nds) => nds.concat(newNode));
       setNodeId((id) => id + 1);
     },
-    [nodeId, setNodes]
+    [
+      nodeId,
+      setNodes,
+      handleNodeTypeChange,
+      handleNodeDescriptionChange,
+      handleEventConfigChange,
+    ]
   );
 
   // Node palette items that can be dragged
   const paletteNodeTypes = [
-    { type: "custom", label: "Custom Node", description: "Buildable node" },
+    {
+      type: "condition",
+      label: "Condition",
+      description: "Triggers on conditions",
+    },
+    { type: "listener", label: "Listener", description: "Monitors events" },
+    { type: "event", label: "Event", description: "Sends notifications" },
+    {
+      type: "accessory",
+      label: "Accessory",
+      description: "Smart home devices",
+    },
   ];
 
   // Define node types for ReactFlow
   const flowNodeTypes = {
     custom: CustomNode,
+    condition: ConditionNode,
+    listener: ListenerNode,
+    event: EventNode,
+    accessory: AccessoryNode,
   };
 
   const onDragStart = (event, nodeType) => {
@@ -523,6 +695,74 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
+  // Load nodes from MongoDB when project loads
+  useEffect(() => {
+    const loadNodes = async () => {
+      try {
+        const projectData = await projectsAPI.getById(project.id);
+
+        if (projectData.nodes && projectData.nodes.listeners) {
+          const { nodes: loadedNodes, edges: loadedEdges } =
+            userNodesToReactFlow(projectData.nodes);
+
+          // Attach handlers based on node type
+          const nodesWithHandlers = loadedNodes.map((node) => {
+            const updatedData = {
+              ...node.data,
+              onTypeChange: handleNodeTypeChange,
+            };
+
+            if (node.type === "condition" || node.type === "listener") {
+              updatedData.onDescriptionChange = handleNodeDescriptionChange;
+            } else if (node.type === "event") {
+              updatedData.onConfigChange = handleEventConfigChange;
+            }
+
+            return {
+              ...node,
+              data: updatedData,
+            };
+          });
+
+          setNodes(nodesWithHandlers);
+          setEdges(loadedEdges);
+
+          // Update nodeId counter to avoid conflicts
+          const maxId = Math.max(
+            ...loadedNodes.map((n) => {
+              const match = n.id.match(/\d+$/);
+              return match ? parseInt(match[0]) : 0;
+            }),
+            0
+          );
+          setNodeId(maxId + 1);
+        }
+      } catch (error) {
+        console.error("Error loading nodes:", error);
+      }
+    };
+
+    if (project.id) {
+      loadNodes();
+    }
+  }, [project.id, handleNodeTypeChange, handleNodeDescriptionChange]);
+
+  // Save nodes to MongoDB
+  const handleSaveNodes = useCallback(async () => {
+    try {
+      // Convert React Flow format to UserNodes format
+      const userNodesData = reactFlowToUserNodes(nodes, edges);
+
+      // Save to MongoDB via API
+      await projectsAPI.saveNodes(project.id, userNodesData);
+
+      alert("Nodes saved successfully!");
+    } catch (error) {
+      console.error("Error saving nodes:", error);
+      alert(`Failed to save nodes: ${error.message}`);
+    }
+  }, [nodes, edges, project.id]);
+
   // Cleanup webcam and video processing on unmount
   useEffect(() => {
     return () => {
@@ -539,16 +779,23 @@ export function ProjectView({ project, onBack }) {
   return (
     <div className="flex flex-col h-full w-full">
       {/* Header with back button */}
-      <div className="flex items-center gap-4 p-4 border-b border-gray-700">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onBack}
-          className="h-8 w-8"
-        >
-          <IconChevronLeft className="h-4 w-4" />
-        </Button>
-        <h1 className="text-2xl font-semibold text-white">{project.name}</h1>
+      <div className="flex items-center justify-between gap-4 p-4 border-b border-gray-700">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onBack}
+            className="h-8 w-8"
+          >
+            <IconChevronLeft className="h-4 w-4" />
+          </Button>
+          <h1
+            className="text-2xl font-semibold text-white"
+            style={{ fontFamily: "Zalando Sans Expanded, sans-serif" }}
+          >
+            {project.name}
+          </h1>
+        </div>
       </div>
 
       {/* Two horizontal rectangles - each taking half the screen */}
@@ -747,29 +994,51 @@ export function ProjectView({ project, onBack }) {
               <h3 className="text-white font-semibold mb-3 text-sm">
                 Node Palette
               </h3>
-              {paletteNodeTypes.map((nodeType) => (
-                <div
-                  key={nodeType.type}
-                  draggable
-                  onDragStart={(e) => onDragStart(e, nodeType.type)}
-                  className="px-3 py-2 mb-2 bg-gray-800 border border-gray-600 rounded cursor-move hover:bg-gray-700 transition-colors"
-                >
-                  <div className="text-white text-xs font-medium">
-                    {nodeType.label}
+              {paletteNodeTypes.map((nodeType) => {
+                // Get border color based on node type
+                let borderColor = "#6b7280"; // Default gray
+                if (nodeType.type === "condition") {
+                  borderColor = "#e91e63"; // Pink/red
+                } else if (nodeType.type === "listener") {
+                  borderColor = "#2196F3"; // Blue
+                } else if (nodeType.type === "event") {
+                  borderColor = "#4caf50"; // Green
+                } else if (nodeType.type === "accessory") {
+                  borderColor = "#ff9800"; // Orange
+                }
+
+                return (
+                  <div
+                    key={nodeType.type}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, nodeType.type)}
+                    className="px-3 py-2 mb-2 bg-gray-900 border-2 rounded cursor-move hover:bg-gray-800 transition-colors"
+                    style={{ borderColor }}
+                  >
+                    <div className="text-white text-xs font-medium">
+                      {nodeType.label}
+                    </div>
+                    <div className="text-gray-400 text-xs mt-1">
+                      {nodeType.description}
+                    </div>
                   </div>
-                  <div className="text-gray-400 text-xs mt-1">
-                    {nodeType.description}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* React Flow canvas */}
             <div
               ref={reactFlowWrapper}
-              className="w-full h-full bg-gray-950"
+              className="w-full h-full bg-gray-950 relative"
               style={{ height: "100%" }}
             >
+              {/* Save Nodes button - positioned top right */}
+              <Button
+                onClick={handleSaveNodes}
+                className="absolute top-4 right-4 z-10 rounded-none bg-black border-2 border-white text-white hover:bg-gray-900"
+              >
+                Save Nodes
+              </Button>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -780,6 +1049,12 @@ export function ProjectView({ project, onBack }) {
                 onDragOver={onDragOver}
                 nodeTypes={flowNodeTypes}
                 fitView
+                fitViewOptions={{
+                  padding: 0.2, // Add 20% padding around nodes for better zoom out
+                  minZoom: 0.1, // Allow zooming out more
+                  maxZoom: 1.5, // Limit maximum zoom
+                  duration: 400, // Smooth animation
+                }}
                 className="bg-gray-950"
                 colorMode="dark"
               >
