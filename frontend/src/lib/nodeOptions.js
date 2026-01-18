@@ -23,7 +23,7 @@ export const ListenerOptions = [
   "custom",
 ];
 
-export const EventOptions = ["Gmail", "Text", "Emergency"];
+export const EventOptions = ["Email", "Text", "Emergency"];
 
 export const AccessoryOptions = [
   "Smart Light Bulb",

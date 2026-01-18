@@ -34,6 +34,6 @@ class ListenerOptions:
 class EventOptions:
     """Available event type options (if needed in the future)"""
     OPTIONS = [
-        "Gmail",
+        "Email",
         "Text"
     ]

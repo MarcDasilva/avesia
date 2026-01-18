@@ -7,7 +7,12 @@ import {
   SelectValue,
 } from "./ui/select";
 import { Button } from "./ui/button";
-import { ConditionOptions, ListenerOptions, EventOptions, AccessoryOptions } from "../lib/nodeOptions";
+import {
+  ConditionOptions,
+  ListenerOptions,
+  EventOptions,
+  AccessoryOptions,
+} from "../lib/nodeOptions";
 import { Input } from "./ui/input";
 import { Handle, Position } from "@xyflow/react";
 import { IconEdit, IconArrowUpRight } from "@tabler/icons-react";
@@ -22,7 +27,8 @@ import {
 import { Textarea } from "./ui/textarea";
 
 // Base node styles
-const nodeBaseStyle = "px-4 py-3 shadow-lg rounded-lg border-2 min-w-[180px] bg-gray-900";
+const nodeBaseStyle =
+  "px-4 py-3 shadow-lg rounded-lg border-2 min-w-[180px] bg-gray-900";
 const selectedStyle = "border-white";
 const unselectedStyle = "";
 
@@ -35,7 +41,9 @@ const ACCESSORY_BORDER = "#ff9800"; // Orange
 // Condition Node Component
 export const ConditionNode = ({ id, data, selected }) => {
   const [isDescriptionDialogOpen, setIsDescriptionDialogOpen] = useState(false);
-  const [tempDescription, setTempDescription] = useState(data.description || "");
+  const [tempDescription, setTempDescription] = useState(
+    data.description || ""
+  );
 
   const handleTypeChange = (value) => {
     if (data.onTypeChange) {
@@ -75,7 +83,10 @@ export const ConditionNode = ({ id, data, selected }) => {
             <IconEdit className="h-3 w-3" />
           </Button>
         </div>
-        <Select value={data.condition_type || ""} onValueChange={handleTypeChange}>
+        <Select
+          value={data.condition_type || ""}
+          onValueChange={handleTypeChange}
+        >
           <SelectTrigger className="w-full bg-gray-800 border-gray-600 text-white text-xs h-8">
             <SelectValue placeholder="Select condition type" />
           </SelectTrigger>
@@ -106,7 +117,10 @@ export const ConditionNode = ({ id, data, selected }) => {
       </div>
 
       {/* Description Dialog */}
-      <Dialog open={isDescriptionDialogOpen} onOpenChange={setIsDescriptionDialogOpen}>
+      <Dialog
+        open={isDescriptionDialogOpen}
+        onOpenChange={setIsDescriptionDialogOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Condition Description</DialogTitle>
@@ -138,7 +152,9 @@ export const ConditionNode = ({ id, data, selected }) => {
 // Listener Node Component
 export const ListenerNode = ({ id, data, selected }) => {
   const [isDescriptionDialogOpen, setIsDescriptionDialogOpen] = useState(false);
-  const [tempDescription, setTempDescription] = useState(data.description || "");
+  const [tempDescription, setTempDescription] = useState(
+    data.description || ""
+  );
 
   const handleTypeChange = (value) => {
     if (data.onTypeChange) {
@@ -178,7 +194,10 @@ export const ListenerNode = ({ id, data, selected }) => {
             <IconEdit className="h-3 w-3" />
           </Button>
         </div>
-        <Select value={data.listener_type || ""} onValueChange={handleTypeChange}>
+        <Select
+          value={data.listener_type || ""}
+          onValueChange={handleTypeChange}
+        >
           <SelectTrigger className="w-full bg-gray-800 border-gray-600 text-white text-xs h-8">
             <SelectValue placeholder="Select listener type" />
           </SelectTrigger>
@@ -216,7 +235,10 @@ export const ListenerNode = ({ id, data, selected }) => {
       </div>
 
       {/* Description Dialog */}
-      <Dialog open={isDescriptionDialogOpen} onOpenChange={setIsDescriptionDialogOpen}>
+      <Dialog
+        open={isDescriptionDialogOpen}
+        onOpenChange={setIsDescriptionDialogOpen}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Listener Description</DialogTitle>
@@ -281,7 +303,7 @@ export const EventNode = ({ id, data, selected }) => {
 
   // Show different fields based on event type
   const showFields = () => {
-    if (eventType === "Gmail") {
+    if (eventType === "Email") {
       return (
         <div className="mt-2 space-y-2">
           {data.recipient && (
@@ -376,17 +398,19 @@ export const EventNode = ({ id, data, selected }) => {
           <DialogHeader>
             <DialogTitle>Configure {eventType} Event</DialogTitle>
             <DialogDescription>
-              {eventType === "Gmail" && "Set recipient email and message"}
+              {eventType === "Email" && "Set recipient email and message"}
               {eventType === "Text" && "Set phone number and message"}
               {eventType === "Emergency" && "Set emergency message"}
               {!eventType && "Configure event details"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            {eventType === "Gmail" && (
+            {eventType === "Email" && (
               <>
                 <div>
-                  <label className="text-sm text-gray-300 mb-1 block">Recipient Email</label>
+                  <label className="text-sm text-gray-300 mb-1 block">
+                    Recipient Email
+                  </label>
                   <Input
                     type="email"
                     value={tempRecipient}
@@ -396,7 +420,9 @@ export const EventNode = ({ id, data, selected }) => {
                   />
                 </div>
                 <div>
-                  <label className="text-sm text-gray-300 mb-1 block">Message</label>
+                  <label className="text-sm text-gray-300 mb-1 block">
+                    Message
+                  </label>
                   <Textarea
                     value={tempMessage}
                     onChange={(e) => setTempMessage(e.target.value)}
@@ -409,7 +435,9 @@ export const EventNode = ({ id, data, selected }) => {
             {eventType === "Text" && (
               <>
                 <div>
-                  <label className="text-sm text-gray-300 mb-1 block">Phone Number</label>
+                  <label className="text-sm text-gray-300 mb-1 block">
+                    Phone Number
+                  </label>
                   <Input
                     type="tel"
                     value={tempNumber}
@@ -419,7 +447,9 @@ export const EventNode = ({ id, data, selected }) => {
                   />
                 </div>
                 <div>
-                  <label className="text-sm text-gray-300 mb-1 block">Message</label>
+                  <label className="text-sm text-gray-300 mb-1 block">
+                    Message
+                  </label>
                   <Textarea
                     value={tempMessage}
                     onChange={(e) => setTempMessage(e.target.value)}
@@ -431,7 +461,9 @@ export const EventNode = ({ id, data, selected }) => {
             )}
             {eventType === "Emergency" && (
               <div>
-                <label className="text-sm text-gray-300 mb-1 block">Emergency Message</label>
+                <label className="text-sm text-gray-300 mb-1 block">
+                  Emergency Message
+                </label>
                 <Textarea
                   value={tempMessage}
                   onChange={(e) => setTempMessage(e.target.value)}
@@ -466,7 +498,10 @@ export const AccessoryNode = ({ id, data, selected }) => {
 
   const handleConfigClick = (e) => {
     e.stopPropagation();
-    window.open("https://globe-electric.com/pages/smart-faqs?filter.v.availability=1", "_blank");
+    window.open(
+      "https://globe-electric.com/pages/smart-faqs?filter.v.availability=1",
+      "_blank"
+    );
   };
 
   return (
@@ -488,7 +523,10 @@ export const AccessoryNode = ({ id, data, selected }) => {
           <IconArrowUpRight className="h-3 w-3" />
         </Button>
       </div>
-      <Select value={data.accessory_type || ""} onValueChange={handleTypeChange}>
+      <Select
+        value={data.accessory_type || ""}
+        onValueChange={handleTypeChange}
+      >
         <SelectTrigger className="nodrag w-full bg-gray-800 border-gray-600 text-white text-xs h-8">
           <SelectValue placeholder="Select accessory type" />
         </SelectTrigger>
@@ -514,4 +552,3 @@ export const AccessoryNode = ({ id, data, selected }) => {
     </div>
   );
 };
-

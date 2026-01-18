@@ -83,9 +83,9 @@ PARSING RULES:
    - "if it rains" → weather condition
 
 3. **Events**: Identify WHAT ACTIONS to take
-   - "send email" → Gmail event
+   - "send email" → Email event
    - "send text" → Text event
-   - "notify security team" → Gmail event with recipient
+   - "notify security team" → Email event with recipient
    - "record video" → custom event with action details
 
 4. **Multiple Items**: If the user describes multiple scenarios, create multiple listeners/conditions/events
@@ -104,7 +104,7 @@ Output:
     {{"name": "nighttime", "type": "lighting: day/night/low-light", "value": "night"}}
   ],
   "events": [
-    {{"action": "send_alert", "type": "Gmail", "message": "Motion detected at night"}}
+    {{"action": "send_alert", "type": "Email", "message": "Motion detected at night"}}
   ]
 }}
 
@@ -133,7 +133,7 @@ Output:
     {{"name": "high_temperature", "type": "custom", "threshold": 75.0}}
   ],
   "events": [
-    {{"action": "send_alert", "type": "Gmail", "priority": "high", "message": "Temperature exceeded 75°"}},
+    {{"action": "send_alert", "type": "Email", "priority": "high", "message": "Temperature exceeded 75°"}},
     {{"action": "activate_cooling", "type": "custom", "duration": "15m"}}
   ]
 }}
