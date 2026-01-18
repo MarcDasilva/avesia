@@ -562,13 +562,11 @@ export function useOvershootVision(config = {}) {
 
       throw err;
     }
-  }, [isConnecting, startChangeDetection]);
+  }, [isConnecting, initializeSDK, prompt, outputSchema]);
 
   // Stop vision processing
   const stop = useCallback(async () => {
     logWithTimestamp("⏸️ Stopping all processes...");
-    
-    stopChangeDetection();
 
     if (visionRef.current) {
       try {
@@ -595,7 +593,7 @@ export function useOvershootVision(config = {}) {
     setError(null);
     resultCountRef.current = 0;
     logWithTimestamp("✅ System stopped.");
-  }, [stopChangeDetection]);
+  }, []);
 
   // Cleanup on unmount only
   useEffect(() => {

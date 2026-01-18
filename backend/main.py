@@ -30,6 +30,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent / "Nodes"))
 from node_processing import process_listeners
 
+# Import prompt parser and converter
+sys.path.insert(0, str(Path(__file__).parent / "Nodes" / "nodes_assistant"))
+try:
+    from prompt_parser import parse_prompt
+    from converter import convert_to_export_format
+    GEMINI_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️  Warning: Could not import prompt_parser: {e}")
+    GEMINI_AVAILABLE = False
+
 load_dotenv()
 
 app = FastAPI(title="Avesia Backend API", version="1.0.0")
@@ -684,6 +694,74 @@ async def control_service(control: ServiceControl):
         raise HTTPException(status_code=503, detail=f"Failed to connect to Node.js service: {str(e)}")
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"Node.js service error: {e.response.text}")
+
+@app.post("/api/nodes/parse-prompt")
+async def parse_prompt_endpoint(request: Request):
+    """
+    Parse a natural language prompt into node configurations using AI (Gemini).
+    Returns structured node configuration ready to be displayed on frontend.
+    
+    Request body: { "prompt": "your natural language automation request" }
+    Response: { "success": true, "nodes": {...UserNodes format...}, "message": "..." }
+    """
+    if not GEMINI_AVAILABLE:
+        raise HTTPException(
+            status_code=503, 
+            detail="AI prompt parsing is not available. Please ensure GEMINI_API_KEY is set in your .env file and prompt_parser module is installed."
+        )
+    
+    try:
+        # Parse request body
+        body = await request.json()
+        user_prompt = body.get("prompt", "").strip()
+        
+        if not user_prompt:
+            raise HTTPException(status_code=400, detail="Prompt is required")
+        
+        # Parse the prompt using Gemini AI
+        print(f"\n🤖 Parsing prompt with AI: {user_prompt[:100]}...")
+        parsed_data = parse_prompt(user_prompt)
+        
+        # Convert to export format (ensures proper structure)
+        export_data = convert_to_export_format(parsed_data)
+        
+        # Count nodes for logging
+        total_listeners = export_data.get("total_listeners", 0)
+        total_conditions = sum(len(listener.get("conditions", [])) for listener in export_data.get("listeners", []))
+        total_events = sum(len(listener.get("events", [])) for listener in export_data.get("listeners", []))
+        total_accessories = sum(len(listener.get("accessories", [])) for listener in export_data.get("listeners", []))
+        
+        print(f"✅ AI Parse successful:")
+        print(f"   Listeners: {total_listeners}")
+        print(f"   Conditions: {total_conditions}")
+        print(f"   Events: {total_events}")
+        print(f"   Accessories: {total_accessories}")
+        
+        return {
+            "success": True,
+            "nodes": export_data,
+            "message": f"Successfully parsed prompt into {total_listeners} listener(s) with {total_conditions} condition(s), {total_events} event(s), and {total_accessories} accessory(ies)",
+            "stats": {
+                "listeners": total_listeners,
+                "conditions": total_conditions,
+                "events": total_events,
+                "accessories": total_accessories
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # Handle specific errors from prompt_parser (e.g., missing API key)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"❌ Error parsing prompt: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to parse prompt: {str(e)}"
+        )
 
 # ============================================================================
 # Project Management Endpoints
