@@ -4,6 +4,7 @@ import {
   IconPlus,
   IconVideo,
   IconFile,
+  IconChartBar,
 } from "@tabler/icons-react";
 import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
@@ -89,6 +90,11 @@ export function ProjectView({ project, onBack }) {
   const [projectOutputSchema, setProjectOutputSchema] = useState(null);
   const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
 
+  // View state - switch between Nodes and Analytics
+  const [currentView, setCurrentView] = useState("nodes"); // "nodes" or "analytics"
+  const [analyticsEvents, setAnalyticsEvents] = useState([]);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+
   // Overshoot SDK integration for camera - uses project-specific prompt
   const {
     isActive: isOvershootActive,
@@ -100,6 +106,7 @@ export function ProjectView({ project, onBack }) {
   } = useOvershootVision({
     prompt: projectPrompt,
     outputSchema: projectOutputSchema,
+    projectId: project.id, // CRITICAL: Pass project ID for email alerts and prompt isolation
     onResult: (result, isJson, timestamp) => {
       // Results are automatically sent to backend via the hook
       // Log immediately for visibility
@@ -118,7 +125,7 @@ export function ProjectView({ project, onBack }) {
     processVideoFile,
     stopAll: stopAllVideoProcessing,
     cleanup: cleanupVideoProcessing,
-  } = useOvershootVideoFile(projectPrompt, projectOutputSchema);
+  } = useOvershootVideoFile(projectPrompt, projectOutputSchema, project.id); // CRITICAL: Pass project ID
 
   // Handle node type change from dropdown
   const handleNodeTypeChange = useCallback((nodeId, newType) => {
@@ -803,10 +810,99 @@ export function ProjectView({ project, onBack }) {
     };
   }, [isProcessingVideos, videoRefs]);
 
+  // CRITICAL: Cleanup when project changes - stop all prompts to prevent overlap
+  // Use a ref to track the previous project ID to avoid cleanup on initial mount
+  const previousProjectIdRef = useRef(project.id);
+
+  useEffect(() => {
+    // Store current project ID
+    const currentProjectId = project.id;
+
+    // Only cleanup if project ID actually changed (not on initial mount)
+    if (
+      previousProjectIdRef.current !== null &&
+      previousProjectIdRef.current !== currentProjectId
+    ) {
+      console.log(
+        "🧹 Cleaning up Overshoot for previous project:",
+        previousProjectIdRef.current
+      );
+
+      // Stop all processing gracefully - WebSocket errors during cleanup are expected and will be suppressed
+      Promise.all([
+        stopOvershoot().catch((err) => {
+          // Suppress WebSocket errors during cleanup - they're expected when switching projects
+          if (!err.message?.includes("WebSocket")) {
+            console.warn("Error stopping Overshoot on cleanup:", err);
+          }
+        }),
+        stopAllVideoProcessing().catch((err) => {
+          // Suppress WebSocket errors during cleanup
+          if (!err.message?.includes("WebSocket")) {
+            console.warn("Error stopping video processing on cleanup:", err);
+          }
+        }),
+      ]).finally(() => {
+        cleanupVideoProcessing();
+
+        // Reset prompt state to prevent old prompts from being used
+        setProjectPrompt(null);
+        setProjectOutputSchema(null);
+      });
+    }
+
+    // Update ref for next render
+    previousProjectIdRef.current = currentProjectId;
+  }, [project.id]); // CRITICAL: Only depend on project.id, not the functions
+
   // Load nodes and prompt from MongoDB when project loads (parallel for speed)
+  // Use ref to track if we've already loaded this project to prevent re-loading
+  const loadedProjectIdRef = useRef(null);
+
   useEffect(() => {
     const loadProjectData = async () => {
       if (!project.id) return;
+
+      // CRITICAL: Only stop and reload if this is a different project
+      // Don't stop if we're already on this project (prevents camera from cutting off)
+      const isNewProject = loadedProjectIdRef.current !== project.id;
+
+      if (isNewProject) {
+        // CRITICAL: Stop any existing prompts BEFORE loading new project
+        // This ensures no prompt overlap when switching projects
+        console.log(
+          "🛑 Stopping existing prompts before loading NEW project:",
+          project.id
+        );
+        await Promise.all([
+          stopOvershoot().catch((err) => {
+            // Suppress WebSocket errors - they're expected when stopping connections
+            if (!err.message?.includes("WebSocket")) {
+              console.warn("Warning stopping Overshoot:", err);
+            }
+          }),
+          stopAllVideoProcessing().catch((err) => {
+            // Suppress WebSocket errors during stop
+            if (!err.message?.includes("WebSocket")) {
+              console.warn("Warning stopping video processing:", err);
+            }
+          }),
+        ]);
+        cleanupVideoProcessing();
+
+        // Small delay to ensure WebSocket connections are fully closed
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // Clear old prompt state to ensure clean start
+        setProjectPrompt(null);
+        setProjectOutputSchema(null);
+      } else {
+        // Same project - just ensure prompt is loaded (don't stop camera)
+        console.log("📋 Same project, skipping stop - keeping camera active");
+      }
+
+      // Mark this project as loaded
+      loadedProjectIdRef.current = project.id;
 
       setIsLoadingPrompt(true);
 
@@ -885,7 +981,9 @@ export function ProjectView({ project, onBack }) {
     };
 
     loadProjectData();
-  }, [project.id, handleNodeTypeChange, handleNodeDescriptionChange]);
+    // CRITICAL: Only depend on project.id - don't include handlers that might change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
   // Save nodes to MongoDB
   const handleSaveNodes = useCallback(async () => {
@@ -925,18 +1023,50 @@ export function ProjectView({ project, onBack }) {
     }
   }, [nodes, edges, project.id]);
 
+  // Load analytics events
+  const loadAnalytics = useCallback(async () => {
+    setIsLoadingAnalytics(true);
+    try {
+      const data = await projectsAPI.getAnalytics(project.id);
+      setAnalyticsEvents(data.events || []);
+    } catch (error) {
+      console.error("Error loading analytics:", error);
+      setAnalyticsEvents([]);
+    } finally {
+      setIsLoadingAnalytics(false);
+    }
+  }, [project.id]);
+
+  // Handle view switch
+  const handleViewSwitch = useCallback(
+    (view) => {
+      setCurrentView(view);
+      if (view === "analytics") {
+        loadAnalytics();
+      }
+    },
+    [loadAnalytics]
+  );
+
   // Cleanup webcam and video processing on unmount
+  // Cleanup on unmount only - don't interfere with active camera
   useEffect(() => {
     return () => {
-      if (webcamStream) {
-        webcamStream.getTracks().forEach((track) => track.stop());
+      // Only cleanup old webcamStream on unmount, not when it changes
+      // The useOvershootVision hook manages its own stream cleanup
+      if (webcamStream && !isOvershootActive) {
+        webcamStream.getTracks().forEach((track) => {
+          if (track.readyState !== "ended") {
+            track.stop();
+          }
+        });
       }
-      // Cleanup video file processing
+      // Cleanup video file processing when component unmounts
       cleanupVideoProcessing();
       // Note: We don't need to revoke URLs for backend videos
       // Only revoke blob URLs if we add any
     };
-  }, [webcamStream, cleanupVideoProcessing]);
+  }, []); // CRITICAL: Empty deps - only cleanup on unmount, not during normal operation
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -968,9 +1098,9 @@ export function ProjectView({ project, onBack }) {
         {/* Top rectangle - 50% of screen */}
         <div
           className="w-full border-b border-gray-700"
-          style={{ height: "50%", overflow: "auto" }}
+          style={{ height: "50%", overflow: "hidden" }}
         >
-          <div className="p-4 h-full">
+          <div className="p-4 h-full flex items-center justify-center">
             {/* Display videos if any */}
             {isLoadingVideos ? (
               <div className="h-full flex items-center justify-center">
@@ -979,27 +1109,33 @@ export function ProjectView({ project, onBack }) {
             ) : videos.length > 0 ? (
               <div
                 className={`flex ${
-                  videos.length === 1 ? "justify-center" : "justify-start"
-                } items-center gap-4 h-full p-4 overflow-x-auto`}
+                  videos.length === 1 ? "justify-center" : "justify-center"
+                } items-center gap-4 h-full w-full`}
+                style={{ maxHeight: "100%", overflow: "hidden" }}
               >
                 {videos.map((video, index) => (
                   <div
                     key={index}
-                    className={`flex items-center gap-3 ${
+                    className={`flex items-center justify-center ${
                       videos.length > 1 ? "flex-1" : ""
                     }`}
-                    style={
-                      videos.length > 1 ? { maxWidth: "calc(50% - 8px)" } : {}
-                    }
+                    style={{
+                      maxWidth: videos.length > 1 ? "calc(50% - 8px)" : "100%",
+                      maxHeight: "100%",
+                      height: "100%",
+                    }}
                   >
                     <div
                       className="relative bg-gray-900 rounded-lg overflow-hidden border-2 border-gray-600 shadow-lg video-container"
                       style={{
                         width: "100%",
+                        maxWidth: "100%",
+                        maxHeight: "100%",
                         aspectRatio: "16/9",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
+                        height: "auto",
                       }}
                       onMouseEnter={() => setHoveredVideoIndex(index)}
                       onMouseLeave={() => setHoveredVideoIndex(null)}
@@ -1075,6 +1211,12 @@ export function ProjectView({ project, onBack }) {
                           playsInline
                           loop
                           className="w-full h-full object-contain"
+                          style={{
+                            maxWidth: "100%",
+                            maxHeight: "100%",
+                            width: "auto",
+                            height: "auto",
+                          }}
                         >
                           Your browser does not support the video tag.
                         </video>
@@ -1092,7 +1234,7 @@ export function ProjectView({ project, onBack }) {
                             style={{
                               width: "100%",
                               height: "100%",
-                              minHeight: "300px",
+                              maxHeight: "100%",
                               backgroundColor: "#000",
                               display: "block",
                             }}
@@ -1228,41 +1370,152 @@ export function ProjectView({ project, onBack }) {
               })}
             </div>
 
-            {/* React Flow canvas */}
+            {/* React Flow canvas or Analytics view */}
             <div
               ref={reactFlowWrapper}
               className="w-full h-full bg-gray-950 relative"
               style={{ height: "100%" }}
             >
-              {/* Save Nodes button - positioned top right */}
-              <Button
-                onClick={handleSaveNodes}
-                className="absolute top-4 right-4 z-10 rounded-none bg-black border-2 border-white text-white hover:bg-gray-900"
-              >
-                Save Nodes
-              </Button>
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-                nodeTypes={flowNodeTypes}
-                fitView
-                fitViewOptions={{
-                  padding: 0.2, // Add 20% padding around nodes for better zoom out
-                  minZoom: 0.1, // Allow zooming out more
-                  maxZoom: 1.5, // Limit maximum zoom
-                  duration: 400, // Smooth animation
-                }}
-                className="bg-gray-950"
-                colorMode="dark"
-              >
-                <Background color="#374151" gap={16} />
-                <Controls />
-              </ReactFlow>
+              {/* View toggle buttons - positioned top right */}
+              <div className="absolute top-4 right-4 z-10 flex gap-2">
+                {/* Analytics button */}
+                <Button
+                  onClick={() =>
+                    handleViewSwitch(
+                      currentView === "analytics" ? "nodes" : "analytics"
+                    )
+                  }
+                  className={`rounded-none bg-black border-2 text-white hover:bg-gray-900 ${
+                    currentView === "analytics"
+                      ? "border-white"
+                      : "border-gray-600"
+                  }`}
+                >
+                  <IconChartBar className="h-4 w-4 mr-2" />
+                  {currentView === "analytics"
+                    ? "View Nodes"
+                    : "View Analytics"}
+                </Button>
+                {/* Save Nodes button - only show in nodes view */}
+                {currentView === "nodes" && (
+                  <Button
+                    onClick={handleSaveNodes}
+                    className="rounded-none bg-black border-2 border-white text-white hover:bg-gray-900"
+                  >
+                    Save Nodes
+                  </Button>
+                )}
+              </div>
+              {currentView === "nodes" ? (
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={onConnect}
+                  onDrop={onDrop}
+                  onDragOver={onDragOver}
+                  nodeTypes={flowNodeTypes}
+                  fitView
+                  fitViewOptions={{
+                    padding: 0.2, // Add 20% padding around nodes for better zoom out
+                    minZoom: 0.1, // Allow zooming out more
+                    maxZoom: 1.5, // Limit maximum zoom
+                    duration: 400, // Smooth animation
+                  }}
+                  className="bg-gray-950"
+                  colorMode="dark"
+                >
+                  <Background color="#374151" gap={16} />
+                  <Controls />
+                </ReactFlow>
+              ) : (
+                // Analytics view
+                <div className="w-full h-full p-4 overflow-auto">
+                  <div className="max-w-6xl mx-auto">
+                    <h2 className="text-white text-2xl font-semibold mb-6">
+                      Event History
+                    </h2>
+                    {isLoadingAnalytics ? (
+                      <div className="text-white text-center py-8">
+                        Loading events...
+                      </div>
+                    ) : analyticsEvents.length === 0 ? (
+                      <div className="text-gray-400 text-center py-8">
+                        No events recorded yet
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {analyticsEvents.map((event) => {
+                          // Format timestamp
+                          const eventTimestamp =
+                            event.timestamp || event.createdAt;
+                          const eventDate = eventTimestamp
+                            ? new Date(eventTimestamp).toLocaleString()
+                            : "Unknown time";
+
+                          return (
+                            <div
+                              key={event.id}
+                              className="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:bg-gray-800 transition-colors"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-3 mb-2">
+                                    <div className="px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded">
+                                      {event.eventType === "email_alert"
+                                        ? "Email Alert"
+                                        : event.type || "Event"}
+                                    </div>
+                                    <span className="text-gray-400 text-sm">
+                                      {eventDate}
+                                    </span>
+                                  </div>
+                                  <div className="text-white font-medium mb-1">
+                                    {event.description || "Event occurred"}
+                                  </div>
+                                  <div className="text-gray-400 text-sm space-y-1">
+                                    {event.listenerId && (
+                                      <div>
+                                        <span className="text-gray-500">
+                                          Listener:{" "}
+                                        </span>
+                                        <span className="text-gray-300">
+                                          {event.listenerId}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {event.videoId && (
+                                      <div>
+                                        <span className="text-gray-500">
+                                          Video ID:{" "}
+                                        </span>
+                                        <span className="text-gray-300">
+                                          {event.videoId}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {event.emailSentTo && (
+                                      <div>
+                                        <span className="text-gray-500">
+                                          Email sent to:{" "}
+                                        </span>
+                                        <span className="text-gray-300">
+                                          {event.emailSentTo}
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

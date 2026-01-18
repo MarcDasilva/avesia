@@ -8,7 +8,11 @@ import { overshootAPI } from "../lib/api";
  * @param {string} prompt - Optional project-specific prompt (if not provided, will fetch default nodes)
  * @param {object} outputSchema - Optional output schema (if not provided, will fetch default nodes)
  */
-export function useOvershootVideoFile(prompt = null, outputSchema = null) {
+export function useOvershootVideoFile(
+  prompt = null,
+  outputSchema = null,
+  projectId = null
+) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
   const visionRefs = useRef(new Map()); // Store vision instances per video ID
@@ -200,6 +204,11 @@ export function useOvershootVideoFile(prompt = null, outputSchema = null) {
 
             // Send to backend asynchronously (fire and forget, no blocking)
             // Use setTimeout(0) to ensure callback completes first
+            // CRITICAL: Include projectId so backend can trigger email alerts
+            // CRITICAL: Include videoId so backend can extract video clips on email events
+            // Capture projectId and videoId from closure
+            const currentProjectId = projectId;
+            const currentVideoId = videoId;
             setTimeout(() => {
               overshootAPI
                 .sendResult(
@@ -208,7 +217,9 @@ export function useOvershootVideoFile(prompt = null, outputSchema = null) {
                   finalPrompt,
                   finalOutputSchema && Object.keys(finalOutputSchema).length > 0
                     ? "structured"
-                    : null
+                    : null,
+                  currentProjectId, // CRITICAL: Pass project ID for email alert triggers
+                  currentVideoId // CRITICAL: Pass video ID for video clip extraction
                 )
                 .catch((err) => {
                   // Silent fail - backend might be slow

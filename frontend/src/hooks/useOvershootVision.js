@@ -6,7 +6,8 @@ import { overshootAPI } from "../lib/api";
  * Handles camera feed processing with Overshoot SDK
  */
 export function useOvershootVision(config = {}) {
-  const { apiUrl, apiKey, onResult, onError, prompt, outputSchema } = config;
+  const { apiUrl, apiKey, onResult, onError, prompt, outputSchema, projectId } =
+    config;
 
   const [isActive, setIsActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -15,6 +16,7 @@ export function useOvershootVision(config = {}) {
   const streamRef = useRef(null);
   const videoRef = useRef(null);
   const resultCountRef = useRef(0);
+  const isStoppingRef = useRef(false); // Track if we're intentionally stopping
 
   // Helper function to log with timestamp (only important events)
   const logWithTimestamp = (message, data = null, level = "info") => {
@@ -160,6 +162,9 @@ export function useOvershootVision(config = {}) {
 
           // Send to backend asynchronously (fire and forget, no blocking)
           // Use setTimeout(0) to ensure callback completes first
+          // CRITICAL: Include projectId so backend can trigger email alerts
+          // Capture projectId from closure to ensure it's available in setTimeout
+          const currentProjectId = projectId;
           setTimeout(() => {
             overshootAPI
               .sendResult(
@@ -168,7 +173,8 @@ export function useOvershootVision(config = {}) {
                 finalPrompt,
                 finalOutputSchema && Object.keys(finalOutputSchema).length > 0
                   ? "structured"
-                  : null
+                  : null,
+                currentProjectId // CRITICAL: Pass project ID for email alert triggers
               )
               .catch((err) => {
                 // Silent fail - backend might be slow
@@ -181,27 +187,51 @@ export function useOvershootVision(config = {}) {
         onError: (error) => {
           const errorMsg = error.message || error.toString();
 
-          // DEBUG: Always log errors to help diagnose issues
-          console.error("❌ Overshoot SDK onError callback triggered:", error);
-          console.error("❌ Error message:", errorMsg);
-          console.error("❌ Error stack:", error.stack);
-          console.error("❌ Full error object:", error);
+          // CRITICAL: Ignore WebSocket errors if we're intentionally stopping
+          // These are expected when switching projects or stopping the connection
+          if (isStoppingRef.current) {
+            if (
+              errorMsg.includes("WebSocket") ||
+              errorMsg.includes("closed") ||
+              errorMsg.includes("connection") ||
+              errorMsg.includes("WebSocket error occurred")
+            ) {
+              // Silently ignore WebSocket errors during intentional stops
+              console.log(
+                "ℹ️ WebSocket closed during intentional stop (expected)"
+              );
+              return;
+            }
+          }
 
-          // Only log significant errors
+          // DEBUG: Always log errors to help diagnose issues (unless we're stopping)
+          if (!isStoppingRef.current) {
+            console.error(
+              "❌ Overshoot SDK onError callback triggered:",
+              error
+            );
+            console.error("❌ Error message:", errorMsg);
+            console.error("❌ Error stack:", error.stack);
+            console.error("❌ Full error object:", error);
+          }
+
+          // Only log significant errors (ignore expected WebSocket closure messages)
           if (
             !errorMsg.includes("WebSocket is closed") &&
-            !errorMsg.includes("before the connection")
+            !errorMsg.includes("before the connection") &&
+            !errorMsg.includes("WebSocket error occurred") &&
+            !isStoppingRef.current
           ) {
             logWithTimestamp(`❌ SDK error: ${errorMsg}`, null, "error");
           }
 
-          // Check stream health
-          if (streamRef.current) {
+          // Check stream health (only if not intentionally stopping)
+          if (!isStoppingRef.current && streamRef.current) {
             const activeTracks = streamRef.current
               .getTracks()
               .filter((t) => t.readyState === "live");
 
-            if (activeTracks.length === 0) {
+            if (activeTracks.length === 0 && isActive) {
               logWithTimestamp("❌ Camera stream lost", null, "error");
               setError("Camera stream lost. Please restart.");
               setIsActive(false);
@@ -251,10 +281,13 @@ export function useOvershootVision(config = {}) {
       logWithTimestamp(`❌ SDK init failed: ${err.message}`, null, "error");
       throw err;
     }
-  }, [apiUrl, apiKey, onResult, onError, prompt, outputSchema]);
+  }, [apiUrl, apiKey, onResult, onError, prompt, outputSchema, projectId]);
 
   // Start vision processing
   const start = useCallback(async () => {
+    // Reset stopping flag when starting - ensures we don't ignore errors during new session
+    isStoppingRef.current = false;
+
     if (isActive || isConnecting) {
       return;
     }
@@ -356,7 +389,7 @@ export function useOvershootVision(config = {}) {
           logWithTimestamp("⚠️ Video element not in DOM", null, "warn");
         }
 
-        // Set the stream
+        // Set the stream - CRITICAL: Keep stream reference alive to prevent garbage collection
         videoRef.current.srcObject = stream;
         logDebug("Stream set on video element", {
           hasStream: !!videoRef.current.srcObject,
@@ -370,6 +403,13 @@ export function useOvershootVision(config = {}) {
             // Force play
             await videoRef.current.play();
             logDebug("Video play() called successfully");
+
+            // CRITICAL: Keep video element active to prevent stream from being garbage collected
+            // Some browsers stop the stream if the video element is not actively playing
+            if (videoRef.current.paused) {
+              // If somehow paused, play again
+              await videoRef.current.play();
+            }
           } catch (playError) {
             logDebug("Video play() error (may still work)", playError.name);
             // Try again after a moment - sometimes autoplay is blocked initially
@@ -423,19 +463,43 @@ export function useOvershootVision(config = {}) {
         };
 
         // Set up periodic check to ensure video stays playing (faster interval for real-time)
+        // CRITICAL: This prevents the stream from being stopped by the browser
         const playInterval = setInterval(() => {
-          if (videoRef.current) {
+          if (videoRef.current && !isStoppingRef.current) {
             // Check if stream is still attached
             if (!videoRef.current.srcObject) {
               logDebug("Video srcObject was cleared - reattaching");
               videoRef.current.srcObject = stream;
             }
-            // Ensure it's playing
-            if (videoRef.current.paused && isActive) {
-              videoRef.current.play().catch(() => {});
+
+            // Check if stream tracks are still active
+            if (streamRef.current) {
+              const activeTracks = streamRef.current
+                .getTracks()
+                .filter((t) => t.readyState === "live");
+
+              if (activeTracks.length === 0) {
+                logWithTimestamp(
+                  "⚠️ Stream tracks ended - attempting recovery",
+                  null,
+                  "warn"
+                );
+                // Don't stop here - let the SDK handle it or retry
+                return;
+              }
+            }
+
+            // Ensure it's playing - critical for keeping stream alive
+            if (videoRef.current.paused) {
+              videoRef.current.play().catch((err) => {
+                // Only log if not intentionally stopping
+                if (!isStoppingRef.current) {
+                  logDebug("Video play() failed in monitor:", err.name);
+                }
+              });
             }
           }
-        }, 500); // Faster check interval (500ms instead of 1000ms) for real-time responsiveness
+        }, 1000); // Check every second to keep stream alive
 
         // Store interval ID to clear later
         videoRef.current._playInterval = playInterval;
@@ -453,21 +517,57 @@ export function useOvershootVision(config = {}) {
         logWithTimestamp("❌ Video element ref is null", null, "error");
       }
 
-      // Monitor stream health
+      // Monitor stream health - use refs to avoid stale closures
       stream.getTracks().forEach((track) => {
+        // Store original handlers if any
+        const originalOnended = track.onended;
+        const originalOnerror = track.onerror;
+
         track.onended = () => {
-          if (isActive) {
-            logWithTimestamp("⚠️ Camera track ended", null, "warn");
-            setError("Camera stream lost. Please restart.");
-            setIsActive(false);
+          // Check if we're intentionally stopping - if so, ignore track ended events
+          if (isStoppingRef.current) {
+            return;
+          }
+
+          // Check current active state using a function to get latest value
+          setIsActive((currentActive) => {
+            if (currentActive) {
+              logWithTimestamp(
+                "⚠️ Camera track ended unexpectedly",
+                null,
+                "warn"
+              );
+              setError("Camera stream lost. Please restart.");
+              return false;
+            }
+            return currentActive;
+          });
+
+          // Call original handler if it exists
+          if (originalOnended) {
+            originalOnended.call(track);
           }
         };
 
         track.onerror = (error) => {
-          if (isActive) {
-            logWithTimestamp("❌ Camera track error", null, "error");
-            setError("Camera stream error. Please restart.");
-            setIsActive(false);
+          // Check if we're intentionally stopping - if so, ignore errors
+          if (isStoppingRef.current) {
+            return;
+          }
+
+          // Check current active state
+          setIsActive((currentActive) => {
+            if (currentActive) {
+              logWithTimestamp("❌ Camera track error", null, "error");
+              setError("Camera stream error. Please restart.");
+              return false;
+            }
+            return currentActive;
+          });
+
+          // Call original handler if it exists
+          if (originalOnerror) {
+            originalOnerror.call(track, error);
           }
         };
       });
@@ -565,10 +665,23 @@ export function useOvershootVision(config = {}) {
     }
 
     try {
+      // Mark that we're intentionally stopping to suppress expected WebSocket errors
+      isStoppingRef.current = true;
       logWithTimestamp("⏸️ Stopping...");
 
+      // Give a small delay to allow in-flight operations to complete
+      // This reduces WebSocket errors during shutdown
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
       if (visionRef.current) {
-        await visionRef.current.stop();
+        try {
+          await visionRef.current.stop();
+        } catch (stopErr) {
+          // Ignore WebSocket errors during stop - they're expected
+          if (!stopErr.message?.includes("WebSocket")) {
+            console.warn("Warning during SDK stop:", stopErr.message);
+          }
+        }
         visionRef.current = null;
       }
 
@@ -597,24 +710,48 @@ export function useOvershootVision(config = {}) {
       resultCountRef.current = 0;
       logWithTimestamp("✅ Stopped");
     } catch (err) {
-      logWithTimestamp(`❌ Error stopping: ${err.message}`, null, "error");
-      setError(err.message);
+      // Don't log WebSocket errors during intentional stops
+      if (!err.message?.includes("WebSocket")) {
+        logWithTimestamp(`❌ Error stopping: ${err.message}`, null, "error");
+        setError(err.message);
+      }
+    } finally {
+      // Reset stopping flag after a delay to allow any pending error callbacks
+      setTimeout(() => {
+        isStoppingRef.current = false;
+      }, 500);
     }
   }, [isActive, isConnecting]);
 
-  // Cleanup on unmount only
+  // Cleanup on unmount only - CRITICAL: Don't interfere with normal operation
   useEffect(() => {
     return () => {
       // Only cleanup on unmount, not when dependencies change
+      // Mark as stopping to suppress errors during unmount
+      isStoppingRef.current = true;
+
       if (visionRef.current) {
         visionRef.current.stop().catch(() => {
-          // Ignore errors during cleanup
+          // Ignore errors during cleanup - expected on unmount
         });
       }
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current.getTracks().forEach((track) => {
+          // Only stop if not already stopped
+          if (track.readyState !== "ended") {
+            track.stop();
+          }
+        });
       }
       if (videoRef.current) {
+        // Clear interval first
+        if (videoRef.current._playInterval) {
+          clearInterval(videoRef.current._playInterval);
+        }
+        // Clear cleanup listeners
+        if (videoRef.current._cleanupVideoListeners) {
+          videoRef.current._cleanupVideoListeners();
+        }
         videoRef.current.srcObject = null;
       }
     };

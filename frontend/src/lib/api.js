@@ -268,6 +268,25 @@ export const projectsAPI = {
 
     return await response.json();
   },
+
+  // Get analytics/events history for a project
+  async getAnalytics(projectId) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/analytics`,
+      {
+        method: "GET",
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to fetch analytics");
+    }
+
+    return await response.json();
+  },
 };
 
 // Overshoot SDK API
@@ -287,7 +306,16 @@ export const overshootAPI = {
   },
 
   // Send result to backend
-  async sendResult(result, timestamp, prompt, nodeId = null) {
+  // CRITICAL: projectId is required to trigger email alerts and prevent prompt overlap
+  // videoId is optional and used to extract video clips when email events occur
+  async sendResult(
+    result,
+    timestamp,
+    prompt,
+    nodeId = null,
+    projectId = null,
+    videoId = null
+  ) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
 
@@ -300,6 +328,8 @@ export const overshootAPI = {
           timestamp,
           prompt,
           node_id: nodeId,
+          project_id: projectId, // CRITICAL: Include project ID for email alerts
+          video_id: videoId, // Include video ID for video clip extraction on email events
         }),
         signal: controller.signal,
       });
