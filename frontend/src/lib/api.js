@@ -169,6 +169,24 @@ export const projectsAPI = {
     return `${API_BASE_URL}/projects/${projectId}/thumbnail`;
   },
 
+  // Get project prompt from MongoDB nodes
+  async getProjectPrompt(projectId) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/prompt`,
+      {
+        method: "GET",
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch project prompt: ${response.statusText}`);
+    }
+
+    return await response.json();
+  },
+
   // Upload a thumbnail image for a project
   async uploadThumbnail(projectId, file) {
     const { supabase } = await import("./supabase.js");
