@@ -18,7 +18,7 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
         Processed JSON with prompts in the format:
         {
           "nodes": [
-            {"listener_id": "...", "prompt": "Goal: ..., Constraints: ..."}
+            {"name": "...", "datatype": "boolean", "prompt": "Goal: ..., Constraints: ..."}
           ]
         }
     """
@@ -63,7 +63,8 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
             prompt = f"Goal: {goal}, Constraints: none"
         
         nodes.append({
-            "listener_id": listener_id,
+            "name": listener_id,
+            "datatype": "boolean",
             "prompt": prompt
         })
     
@@ -73,34 +74,36 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
 if __name__ == "__main__":
     # Test with sample data
     sample_json = {
-        "listeners": [
-            {
-                "listener_id": "listener_1",
-                "listener_data": {
-                    "name": "person_detector",
-                    "type": "camera"
-                },
-                "conditions": [
-                    {
-                        "condition_id": "cond_1",
-                        "condition_data": {
-                            "name": "night_only",
-                            "threshold": 0.8
-                        }
-                    }
-                ],
-                "events": [
-                    {
-                        "event_id": "event_1",
-                        "event_data": {
-                            "action": "send_alert"
-                        }
-                    }
-                ]
-            }
-        ],
-        "total_listeners": 1
+  "listeners": [
+    {
+      "listener_id": "74a5b922-120f-4ab3-9711-1340fa17b91a",
+      "listener_data": {
+        "name": "package_detection",
+        "type": "object (person, car, animal, package)"
+      },
+      "conditions": [
+        {
+          "condition_id": "e613e065-2a3a-4c68-8507-4324a2445e7f",
+          "condition_data": {
+            "name": "front_door_zone",
+            "type": "zone"
+          }
+        }
+      ],
+      "events": [
+        {
+          "event_id": "b147eb0d-3a85-456d-98be-ba015eeaf524",
+          "event_data": {
+            "action": "send_notification",
+            "type": "Text",
+            "message": "Package delivered to front door"
+          }
+        }
+      ]
     }
+  ],
+  "total_listeners": 1
+}
     
     result = process_listeners(sample_json)
     print(json.dumps(result, indent=2))
