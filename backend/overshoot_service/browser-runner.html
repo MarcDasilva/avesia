@@ -166,7 +166,7 @@
             apiUrl: urlParams.get('apiUrl') || 'https://cluster1.overshoot.ai/api/v0.2',
             apiKey: urlParams.get('apiKey') || '',
             prompt: urlParams.get('prompt') || 'Read any visible text',
-            pythonBackendUrl: urlParams.get('pythonBackendUrl') || 'http://localhost:8000',
+            pythonBackendUrl: urlParams.get('pythonBackendUrl') || 'http://localhost:3001',
             nodes: nodes,
             outputSchema: outputSchema
         }
@@ -481,8 +481,12 @@
                             resultsDiv.removeChild(resultsDiv.lastChild)
                         }
 
-                        // Send result to Python backend
+                        // Send result to Python backend (non-blocking, don't show error if SDK is working)
                         try {
+                            // Use AbortController for timeout
+                            const controller = new AbortController()
+                            const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+                            
                             const response = await fetch(`${config.pythonBackendUrl}/api/results`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -491,15 +495,24 @@
                                     timestamp: new Date().toISOString(),
                                     prompt: config.prompt,
                                     node_id: config.nodes.length > 0 ? 'structured' : null
-                                })
+                                }),
+                                signal: controller.signal
                             })
+                            clearTimeout(timeoutId)
+                            
                             if (!response.ok) {
                                 throw new Error(`HTTP ${response.status}: ${response.statusText}`)
                             }
                             console.log('✅ Result sent to Python backend successfully')
                         } catch (error) {
-                            console.error('❌ Error sending result to Python backend:', error)
-                            showError(`Failed to send result to Python backend: ${error.message}`)
+                            // Only log error, don't show to user if SDK is still working
+                            // This prevents "error fetching" from blocking the UI
+                            if (error.name === 'AbortError') {
+                                console.warn('⚠️ Backend request timed out (SDK still working)')
+                            } else {
+                                console.error('❌ Error sending result to Python backend:', error)
+                            }
+                            // Don't call showError() here - SDK is working, backend is just slow/unavailable
                         }
                     },
                     onError: (error) => {
