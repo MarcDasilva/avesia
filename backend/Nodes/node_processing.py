@@ -36,14 +36,16 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
         # Use description as the primary prompt (user's intent)
         # If no description, use a fallback based on listener type
         if listener_description:
-            # User provided description - use it as the main prompt
-            base_prompt = listener_description
+            # User provided description - wrap it with conditional structure behind the scenes
+            # User sees: "motion detected"
+            # SDK receives: "if motion detected return true, otherwise false"
+            base_prompt = f"if {listener_description} return true, otherwise false"
         elif listener_type and listener_type != "custom":
             # Fallback: use listener type if no description
-            base_prompt = f"Detect {listener_type}"
+            base_prompt = f"if {listener_type.lower()} return true, otherwise false"
         else:
             # Final fallback
-            base_prompt = "Analyze the video feed and detect relevant objects or events"
+            base_prompt = "if relevant objects or events detected return true, otherwise false"
         
         # Extract constraints from conditions (these refine the prompt)
         constraints = []

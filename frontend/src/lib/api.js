@@ -287,6 +287,11 @@ export const projectsAPI = {
 
     return await response.json();
   },
+
+  // Get clip file URL
+  getClipUrl(projectId, clipId) {
+    return `${API_BASE_URL}/projects/${projectId}/clips/${clipId}/file`;
+  },
 };
 
 // Overshoot SDK API

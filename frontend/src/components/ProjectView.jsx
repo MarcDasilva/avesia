@@ -95,6 +95,47 @@ export function ProjectView({ project, onBack }) {
   const [analyticsEvents, setAnalyticsEvents] = useState([]);
   const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
 
+  // Clip video player state
+  const [isClipDialogOpen, setIsClipDialogOpen] = useState(false);
+  const [selectedClip, setSelectedClip] = useState(null);
+  const [clipVideoUrl, setClipVideoUrl] = useState(null);
+
+  // Handle opening clip video player
+  const handleClipClick = useCallback(
+    async (event) => {
+      if (!event.clipId) return;
+
+      setSelectedClip(event);
+
+      // Get userId for clip URL
+      try {
+        const { supabase } = await import("../lib/supabase.js");
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session?.user?.id) {
+          const clipUrl = `${projectsAPI.getClipUrl(
+            project.id,
+            event.clipId
+          )}?userId=${session.user.id}`;
+          setClipVideoUrl(clipUrl);
+          setIsClipDialogOpen(true);
+        } else {
+          // Fallback without userId (might not work but won't crash)
+          setClipVideoUrl(projectsAPI.getClipUrl(project.id, event.clipId));
+          setIsClipDialogOpen(true);
+        }
+      } catch (error) {
+        console.error("Error getting clip URL:", error);
+        // Fallback
+        setClipVideoUrl(projectsAPI.getClipUrl(project.id, event.clipId));
+        setIsClipDialogOpen(true);
+      }
+    },
+    [project.id]
+  );
+
   // Overshoot SDK integration for camera - uses project-specific prompt
   const {
     isActive: isOvershootActive,
@@ -1457,13 +1498,31 @@ export function ProjectView({ project, onBack }) {
                           return (
                             <div
                               key={event.id}
-                              className="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:bg-gray-800 transition-colors"
+                              onClick={() =>
+                                event.clipId && handleClipClick(event)
+                              }
+                              className={`bg-gray-900 border border-gray-700 p-4 transition-colors ${
+                                event.clipId
+                                  ? "cursor-pointer hover:bg-gray-800 hover:border-white"
+                                  : ""
+                              }`}
+                              style={{ borderRadius: 0 }}
                             >
                               <div className="flex items-start justify-between">
                                 <div className="flex-1">
                                   <div className="flex items-center gap-3 mb-2">
-                                    <div className="px-3 py-1 bg-blue-600 text-white text-xs font-medium rounded">
-                                      {event.eventType === "email_alert"
+                                    <div
+                                      className="px-3 py-1 bg-blue-600 text-white text-xs font-medium"
+                                      style={{ borderRadius: 0 }}
+                                    >
+                                      {event.listenerCategory
+                                        ? event.listenerCategory
+                                            .charAt(0)
+                                            .toUpperCase() +
+                                          event.listenerCategory
+                                            .slice(1)
+                                            .replace(/_/g, " ")
+                                        : event.eventType === "email_alert"
                                         ? "Email Alert"
                                         : event.type || "Event"}
                                     </div>
@@ -1473,18 +1532,13 @@ export function ProjectView({ project, onBack }) {
                                   </div>
                                   <div className="text-white font-medium mb-1">
                                     {event.description || "Event occurred"}
+                                    {event.clipId && (
+                                      <span className="text-gray-500 text-xs ml-2">
+                                        (Click to view clip)
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-gray-400 text-sm space-y-1">
-                                    {event.listenerId && (
-                                      <div>
-                                        <span className="text-gray-500">
-                                          Listener:{" "}
-                                        </span>
-                                        <span className="text-gray-300">
-                                          {event.listenerId}
-                                        </span>
-                                      </div>
-                                    )}
                                     {event.videoId && (
                                       <div>
                                         <span className="text-gray-500">
@@ -1492,16 +1546,6 @@ export function ProjectView({ project, onBack }) {
                                         </span>
                                         <span className="text-gray-300">
                                           {event.videoId}
-                                        </span>
-                                      </div>
-                                    )}
-                                    {event.emailSentTo && (
-                                      <div>
-                                        <span className="text-gray-500">
-                                          Email sent to:{" "}
-                                        </span>
-                                        <span className="text-gray-300">
-                                          {event.emailSentTo}
                                         </span>
                                       </div>
                                     )}
@@ -1568,6 +1612,56 @@ export function ProjectView({ project, onBack }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
               Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog for playing clip video */}
+      <Dialog
+        open={isClipDialogOpen}
+        onOpenChange={(open) => {
+          setIsClipDialogOpen(open);
+          if (!open) {
+            setClipVideoUrl(null);
+            setSelectedClip(null);
+          }
+        }}
+      >
+        <DialogContent
+          className="max-w-4xl bg-gray-950 border border-gray-700 p-0"
+          style={{ borderRadius: 0 }}
+        >
+          <DialogHeader className="p-4 border-b border-gray-700">
+            <DialogTitle className="text-white">
+              {selectedClip?.description || "Event Clip"}
+            </DialogTitle>
+            <DialogDescription className="text-gray-400">
+              {selectedClip?.timestamp
+                ? new Date(selectedClip.timestamp).toLocaleString()
+                : "Event recording"}
+            </DialogDescription>
+          </DialogHeader>
+          {clipVideoUrl && (
+            <div className="p-4">
+              <video
+                controls
+                autoPlay
+                className="w-full"
+                style={{ borderRadius: 0 }}
+              >
+                <source src={clipVideoUrl} type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+            </div>
+          )}
+          <DialogFooter className="p-4 border-t border-gray-700">
+            <Button
+              variant="outline"
+              onClick={() => setIsClipDialogOpen(false)}
+              className="rounded-none"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

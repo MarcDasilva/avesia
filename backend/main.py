@@ -115,9 +115,9 @@ EMAIL_RATE_LIMIT_SECONDS = 120  # 2 minutes
 
 # Rate limiting for clip saving: track last clip saved time per listener per project
 # Format: {project_id: {listener_id: timestamp}}
-# This prevents duplicate clips by limiting to once every 5 seconds per listener
+# This prevents duplicate clips by limiting to once every 5 minutes per listener
 clip_rate_limit: Dict[str, Dict[str, float]] = {}
-CLIP_RATE_LIMIT_SECONDS = 5  # 5 seconds - prevents rapid duplicate saves
+CLIP_RATE_LIMIT_SECONDS = 300  # 5 minutes - prevents duplicate clips for same event
 
 # Store nodes configuration
 nodes_store: List[dict] = []
@@ -1952,6 +1952,21 @@ async def get_project_analytics(
     # Fetch events from video_clips collection for this project
     events = []
     try:
+        # Get project nodes to look up listener names/categories
+        project_nodes = project.get("nodes", {})
+        listeners_data = project_nodes.get("listeners", [])
+        
+        # Create a lookup map: listener_id -> listener_data
+        listener_lookup = {}
+        for listener in listeners_data:
+            listener_id = listener.get("listener_id", "")
+            listener_data = listener.get("listener_data", {})
+            listener_lookup[listener_id] = {
+                "name": listener_data.get("name", ""),
+                "listener_type": listener_data.get("listener_type", "custom"),
+                "description": listener_data.get("description", "")
+            }
+        
         # Get video clips (all event types - email alerts, event triggers, etc.)
         clips = db.video_clips.find({"projectId": project_id}).sort("createdAt", -1)
         for clip in clips:
@@ -1959,26 +1974,37 @@ async def get_project_analytics(
             listener_id = clip.get("listenerId", "unknown")
             email_sent_to = clip.get("emailSentTo")
             
-            # Create description based on event type
-            if event_type == "email_alert" and email_sent_to:
-                description = f"Email alert sent to {email_sent_to} for listener {listener_id}"
+            # Look up listener category/name from project nodes
+            listener_info = listener_lookup.get(listener_id, {})
+            listener_category = listener_info.get("listener_type", "custom")
+            listener_name = listener_info.get("name", "")
+            listener_description = listener_info.get("description", "")
+            
+            # Create description based on what occurred (use listener description or name)
+            if listener_description:
+                description = listener_description
+            elif listener_name:
+                description = listener_name
+            elif event_type == "email_alert" and email_sent_to:
+                description = f"Email alert sent to {email_sent_to}"
             elif event_type == "event_trigger":
-                description = f"Event triggered for listener {listener_id}"
+                description = "Event triggered"
             else:
-                description = f"Event occurred for listener {listener_id}"
+                description = "Event occurred"
             
             events.append({
                 "id": clip.get("id"),
-                "type": event_type,  # Use actual event type, not hardcoded "email_alert"
+                "type": event_type,
                 "eventType": event_type,
                 "timestamp": clip.get("eventTimestamp"),
                 "createdAt": clip.get("createdAt"),
                 "listenerId": listener_id,
+                "listenerCategory": listener_category,  # Add listener category
                 "videoId": clip.get("videoId"),
                 "emailSentTo": email_sent_to,
                 "description": description,
-                "clipId": clip.get("id"),  # Include clip ID for frontend to access clip file
-                "clipFilename": clip.get("clipFilename"),  # Include filename for reference
+                "clipId": clip.get("id"),
+                "clipFilename": clip.get("clipFilename"),
             })
     except Exception as e:
         print(f"Error fetching video clips: {e}")
