@@ -1,0 +1,11 @@
+{
+  "emails": [
+    {
+      "recipient": "",
+      "subject": "Test Alert",
+      "message": "This is a test email alert message"
+    }
+  ]
+}
+  
+  
