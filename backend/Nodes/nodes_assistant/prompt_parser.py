@@ -12,7 +12,7 @@ import sys
 
 # Add parent directory to path to import node_options
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from node_options import ConditionOptions, ListenerOptions, EventOptions
+from node_options import ConditionOptions, ListenerOptions, EventOptions, AccessoryOptions
 
 load_dotenv()
 
@@ -41,29 +41,52 @@ Condition Types:
 Event Types:
 {json.dumps(EventOptions.OPTIONS, indent=2)}
 
+Accessory Types:
+{json.dumps(AccessoryOptions.OPTIONS, indent=2)}
+
 OUTPUT FORMAT (return ONLY valid JSON, no markdown):
 {{
   "listeners": [
     {{
-      "name": "descriptive_name",
-      "type": "one of the listener types from the list above"
-    }}
-  ],
-  "conditions": [
-    {{
-      "name": "descriptive_name",
-      "type": "one of the condition types from the list above",
-      "value": "<optional string value>"
-    }}
-  ],
-  "events": [
-    {{
-      "action": "descriptive_action_name",
-      "type": "one of the event types from the list above",
-      "recipient": "<optional email/phone>",
-      "message": "<optional message text>",
-      "duration": "<optional duration like 30s, 5m>",
-      "priority": "<optional: low/medium/high>"
+      "listener_id": "unique_id",
+      "listener_data": {{
+        "name": "descriptive_name",
+        "listener_type": "one of the listener types from the list above",
+        "description": "description of what to detect"
+      }},
+      "conditions": [
+        {{
+          "condition_id": "unique_id",
+          "condition_data": {{
+            "name": "descriptive_name",
+            "condition_type": "one of the condition types from the list above",
+            "description": "description of the condition"
+          }}
+        }}
+      ],
+      "events": [
+        {{
+          "event_id": "unique_id",
+          "event_data": {{
+            "name": "descriptive_name",
+            "event_type": "one of the event types from the list above",
+            "action": "notification",
+            "message": "message text",
+            "recipient": "email or phone",
+            "number": "phone number if applicable",
+            "description": "description of the event"
+          }}
+        }}
+      ],
+      "accessories": [
+        {{
+          "accessory_id": "unique_id",
+          "accessory_data": {{
+            "name": "descriptive_name",
+            "accessory_type": "one of the accessory types from the list above"
+          }}
+        }}
+      ]
     }}
   ]
 }}
@@ -83,14 +106,22 @@ PARSING RULES:
    - "if it rains" → weather condition
 
 3. **Events**: Identify WHAT ACTIONS to take
-   - "send email" → Gmail event
+   - "send email" → Email event
    - "send text" → Text event
-   - "notify security team" → Gmail event with recipient
+   - "notify security team" → Email event with recipient
    - "record video" → custom event with action details
 
-4. **Multiple Items**: If the user describes multiple scenarios, create multiple listeners/conditions/events
+4. **Accessories**: Identify SMART DEVICES to control
+   - "turn on lights" → Smart Light Bulb accessory
+   - "lock the door" → Smart Lock accessory
+   - "adjust temperature" → Smart Thermostat accessory
+   - "activate camera" → Smart Camera accessory
 
-5. **Smart Matching**: Match user descriptions to the closest available option from the lists above
+5. **Multiple Items**: If the user describes multiple scenarios, create multiple listeners/conditions/events/accessories
+
+6. **Smart Matching**: Match user descriptions to the closest available option from the lists above
+
+7. **IDs**: Generate unique IDs for all items (listener_id, condition_id, event_id, accessory_id)
 
 EXAMPLES:
 
@@ -98,43 +129,87 @@ Input: "Alert me via email when motion is detected at night"
 Output:
 {{
   "listeners": [
-    {{"name": "motion_detector", "type": "motion"}}
-  ],
-  "conditions": [
-    {{"name": "nighttime", "type": "lighting: day/night/low-light", "value": "night"}}
-  ],
-  "events": [
-    {{"action": "send_alert", "type": "Gmail", "message": "Motion detected at night"}}
+    {{
+      "listener_id": "listener_001",
+      "listener_data": {{
+        "name": "motion_detector",
+        "listener_type": "motion",
+        "description": "Detect motion activity"
+      }},
+      "conditions": [
+        {{
+          "condition_id": "condition_001",
+          "condition_data": {{
+            "name": "nighttime",
+            "condition_type": "lighting: day/night/low-light",
+            "description": "Only trigger at night"
+          }}
+        }}
+      ],
+      "events": [
+        {{
+          "event_id": "event_001",
+          "event_data": {{
+            "name": "email_alert",
+            "event_type": "Email",
+            "action": "notification",
+            "message": "Motion detected at night",
+            "recipient": "",
+            "number": "",
+            "description": "Send email notification"
+          }}
+        }}
+      ],
+      "accessories": []
+    }}
   ]
 }}
 
-Input: "Send me a text when someone's face is recognized at the front door during business hours"
+Input: "Send me a text when someone approaches the door at night and turn on the lights"
 Output:
 {{
   "listeners": [
-    {{"name": "face_recognition", "type": "face (known / unknown)"}}
-  ],
-  "conditions": [
-    {{"name": "business_hours", "type": "time"}},
-    {{"name": "front_door_zone", "type": "zone"}}
-  ],
-  "events": [
-    {{"action": "send_notification", "type": "Text", "message": "Face recognized at front door"}}
-  ]
-}}
-
-Input: "If temperature goes above 75 degrees, send a high priority alert and turn on cooling for 15 minutes"
-Output:
-{{
-  "listeners": [
-    {{"name": "temperature_monitor", "type": "custom_prompt (natural language)"}}
-  ],
-  "conditions": [
-    {{"name": "high_temperature", "type": "custom", "threshold": 75.0}}
-  ],
-  "events": [
-    {{"action": "send_alert", "type": "Gmail", "priority": "high", "message": "Temperature exceeded 75°"}},
-    {{"action": "activate_cooling", "type": "custom", "duration": "15m"}}
+    {{
+      "listener_id": "listener_002",
+      "listener_data": {{
+        "name": "person_detector",
+        "listener_type": "object (person, car, animal, package)",
+        "description": "Detect person approaching door"
+      }},
+      "conditions": [
+        {{
+          "condition_id": "condition_002",
+          "condition_data": {{
+            "name": "nighttime",
+            "condition_type": "lighting: day/night/low-light",
+            "description": "Only at night"
+          }}
+        }}
+      ],
+      "events": [
+        {{
+          "event_id": "event_002",
+          "event_data": {{
+            "name": "text_notification",
+            "event_type": "Text",
+            "action": "notification",
+            "message": "Person detected at door",
+            "recipient": "",
+            "number": "",
+            "description": "Send text message"
+          }}
+        }}
+      ],
+      "accessories": [
+        {{
+          "accessory_id": "accessory_001",
+          "accessory_data": {{
+            "name": "front_light",
+            "accessory_type": "Smart Light Bulb"
+          }}
+        }}
+      ]
+    }}
   ]
 }}
 
@@ -179,15 +254,17 @@ def parse_prompt_with_gemini(user_prompt: str) -> Dict[str, Any]:
         # Validate structure
         if "listeners" not in result:
             result["listeners"] = []
-        if "conditions" not in result:
-            result["conditions"] = []
-        if "events" not in result:
-            result["events"] = []
+        
+        # Count nested items
+        total_conditions = sum(len(listener.get("conditions", [])) for listener in result["listeners"])
+        total_events = sum(len(listener.get("events", [])) for listener in result["listeners"])
+        total_accessories = sum(len(listener.get("accessories", [])) for listener in result["listeners"])
         
         print(f"✅ Parsed prompt successfully")
         print(f"   Listeners: {len(result['listeners'])}")
-        print(f"   Conditions: {len(result['conditions'])}")
-        print(f"   Events: {len(result['events'])}")
+        print(f"   Conditions: {total_conditions}")
+        print(f"   Events: {total_events}")
+        print(f"   Accessories: {total_accessories}")
         
         return result
         
