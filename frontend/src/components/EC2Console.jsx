@@ -99,6 +99,34 @@ Disk: 20 GiB
             _
           </span>
         </div>
+        <div
+          style={{
+            marginTop: "auto",
+            padding: "clamp(15px, 2vh, 20px)",
+            width: "100%",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-end",
+          }}
+        >
+          <video
+            src="/waving.mp4"
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            style={{
+              width: "100%",
+              maxWidth: "100%",
+              height: "auto",
+              maxHeight: "350px",
+              objectFit: "contain",
+              border: "1px solid #ffffff",
+              padding: "clamp(15px, 2vh, 20px)",
+            }}
+          />
+        </div>
       </div>
     </>
   );

@@ -8,17 +8,17 @@ export function canConnectNodes(sourceNode, targetNode) {
   if (sourceNode.type === "condition" && targetNode.type === "listener") {
     return true;
   }
-  
+
   // Listener → Event: ✅ Allowed
   if (sourceNode.type === "listener" && targetNode.type === "event") {
     return true;
   }
-  
+
   // Listener → Accessory: ✅ Allowed
   if (sourceNode.type === "listener" && targetNode.type === "accessory") {
     return true;
   }
-  
+
   // All other connections: ❌ Blocked
   return false;
 }
@@ -103,14 +103,19 @@ export function reactFlowToUserNodes(nodes, edges) {
           accessory_id: accessoryNode.id,
           accessory_data: {
             name: accessoryNode.data.name || `accessory_${accessoryNode.id}`,
-            accessory_type: accessoryNode.data.accessory_type || "Smart Light Bulb",
+            accessory_type:
+              accessoryNode.data.accessory_type || "Smart Light Bulb",
           },
           position: accessoryNode.position, // Save position
         });
       }
     }
 
-    if (listenerData.conditions.length > 0 || listenerData.events.length > 0 || (listenerData.accessories && listenerData.accessories.length > 0)) {
+    if (
+      listenerData.conditions.length > 0 ||
+      listenerData.events.length > 0 ||
+      (listenerData.accessories && listenerData.accessories.length > 0)
+    ) {
       userNodesFormat.listeners.push(listenerData);
     }
   }
@@ -120,7 +125,10 @@ export function reactFlowToUserNodes(nodes, edges) {
 }
 
 // Convert UserNodes format to React Flow format
-export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 100 }) {
+export function userNodesToReactFlow(
+  userNodesData,
+  basePosition = { x: 250, y: 100 }
+) {
   const nodes = [];
   const edges = [];
   const nodeIdMap = new Map(); // Map old IDs to new IDs
@@ -133,9 +141,14 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
     const listenerNode = {
       id: listenerData.listener_id,
       type: "listener",
-      position: listenerData.listener_position || { x: currentX + 200, y: currentY },
+      position: listenerData.listener_position || {
+        x: currentX + 200,
+        y: currentY,
+      },
       data: {
-        name: listenerData.listener_data.name || `listener_${listenerData.listener_id}`,
+        name:
+          listenerData.listener_data.name ||
+          `listener_${listenerData.listener_id}`,
         listener_type: listenerData.listener_data.listener_type || "custom",
         description: listenerData.listener_data.description || "", // Load description
         onTypeChange: null, // Will be set by parent component
@@ -153,8 +166,11 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
         type: "condition",
         position: conditionData.position || { x: currentX, y: conditionY },
         data: {
-          name: conditionData.condition_data.name || `condition_${conditionData.condition_id}`,
-          condition_type: conditionData.condition_data.condition_type || "custom",
+          name:
+            conditionData.condition_data.name ||
+            `condition_${conditionData.condition_id}`,
+          condition_type:
+            conditionData.condition_data.condition_type || "custom",
           threshold: conditionData.condition_data.threshold,
           description: conditionData.condition_data.description || "", // Load description
           onTypeChange: null,
@@ -162,7 +178,7 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
         },
       };
       nodes.push(conditionNode);
-      
+
       // Create edge: condition → listener
       edges.push({
         id: `${conditionData.condition_id}-${listenerData.listener_id}`,
@@ -173,7 +189,10 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
 
       // Use saved position if available, otherwise use calculated position
       if (conditionData.position) {
-        conditionY = Math.max(conditionY, conditionData.position.y + verticalSpacing);
+        conditionY = Math.max(
+          conditionY,
+          conditionData.position.y + verticalSpacing
+        );
       } else {
         conditionY += verticalSpacing;
       }
@@ -197,7 +216,7 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
         },
       };
       nodes.push(eventNode);
-      
+
       // Create edge: listener → event
       edges.push({
         id: `${listenerData.listener_id}-${eventData.event_id}`,
@@ -220,16 +239,22 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
       const accessoryNode = {
         id: accessoryData.accessory_id,
         type: "accessory",
-        position: accessoryData.position || { x: currentX + 400, y: accessoryY },
+        position: accessoryData.position || {
+          x: currentX + 400,
+          y: accessoryY,
+        },
         data: {
-          name: accessoryData.accessory_data.name || `accessory_${accessoryData.accessory_id}`,
-          accessory_type: accessoryData.accessory_data.accessory_type || "Smart Light Bulb",
+          name:
+            accessoryData.accessory_data.name ||
+            `accessory_${accessoryData.accessory_id}`,
+          accessory_type:
+            accessoryData.accessory_data.accessory_type || "Smart Light Bulb",
           onTypeChange: null,
           onDescriptionChange: null,
         },
       };
       nodes.push(accessoryNode);
-      
+
       // Create edge: listener → accessory
       edges.push({
         id: `${listenerData.listener_id}-${accessoryData.accessory_id}`,
@@ -240,7 +265,10 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
 
       // Use saved position if available, otherwise use calculated position
       if (accessoryData.position) {
-        accessoryY = Math.max(accessoryY, accessoryData.position.y + verticalSpacing);
+        accessoryY = Math.max(
+          accessoryY,
+          accessoryData.position.y + verticalSpacing
+        );
       } else {
         accessoryY += verticalSpacing;
       }
@@ -256,4 +284,3 @@ export function userNodesToReactFlow(userNodesData, basePosition = { x: 250, y: 
 
   return { nodes, edges };
 }
-
