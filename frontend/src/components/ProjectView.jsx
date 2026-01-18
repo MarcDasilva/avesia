@@ -5,6 +5,7 @@ import {
   IconVideo,
   IconFile,
   IconChartBar,
+  IconSparkles,
 } from "@tabler/icons-react";
 import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
@@ -29,7 +30,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { projectsAPI } from "../lib/api";
+import { projectsAPI, overshootAPI } from "../lib/api";
 import {
   ConditionNode,
   ListenerNode,
@@ -135,6 +136,12 @@ export function ProjectView({ project, onBack }) {
     },
     [project.id]
   );
+
+  // AI prompt parsing state
+  const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [isParsingPrompt, setIsParsingPrompt] = useState(false);
+  const [aiError, setAiError] = useState(null);
 
   // Overshoot SDK integration for camera - uses project-specific prompt
   const {
@@ -1089,6 +1096,85 @@ export function ProjectView({ project, onBack }) {
     [loadAnalytics]
   );
 
+  // Handle AI prompt parsing
+  const handleAiPromptParse = useCallback(async () => {
+    if (!aiPrompt.trim()) {
+      setAiError("Please enter a prompt");
+      return;
+    }
+
+    setIsParsingPrompt(true);
+    setAiError(null);
+
+    try {
+      console.log("🤖 Parsing AI prompt:", aiPrompt);
+      
+      // Call backend API to parse prompt
+      const result = await overshootAPI.parsePrompt(aiPrompt);
+      
+      console.log("✅ AI Parse result:", result);
+      
+      if (!result.success || !result.nodes) {
+        throw new Error(result.message || "Failed to parse prompt");
+      }
+
+      // Convert the parsed nodes to React Flow format
+      const { nodes: newNodes, edges: newEdges } = userNodesToReactFlow(
+        result.nodes,
+        { x: 250, y: 100 }
+      );
+
+      // Attach handlers to the new nodes
+      const nodesWithHandlers = newNodes.map((node) => {
+        const updatedData = {
+          ...node.data,
+          onTypeChange: handleNodeTypeChange,
+        };
+
+        if (node.type === "condition" || node.type === "listener") {
+          updatedData.onDescriptionChange = handleNodeDescriptionChange;
+        } else if (node.type === "event") {
+          updatedData.onConfigChange = handleEventConfigChange;
+        }
+
+        return {
+          ...node,
+          data: updatedData,
+        };
+      });
+
+      // Add new nodes to existing nodes (don't replace)
+      setNodes((existingNodes) => [...existingNodes, ...nodesWithHandlers]);
+      setEdges((existingEdges) => [...existingEdges, ...newEdges]);
+
+      // Update nodeId counter
+      const maxId = Math.max(
+        ...nodesWithHandlers.map((n) => {
+          const match = n.id.match(/\d+$/);
+          return match ? parseInt(match[0]) : 0;
+        }),
+        nodeId
+      );
+      setNodeId(maxId + 1);
+
+      // Close dialog and reset state
+      setIsAiDialogOpen(false);
+      setAiPrompt("");
+      
+    } catch (error) {
+      console.error("❌ Error parsing AI prompt:", error);
+      setAiError(error.message || "Failed to parse prompt. Please try again.");
+    } finally {
+      setIsParsingPrompt(false);
+    }
+  }, [
+    aiPrompt,
+    nodeId,
+    handleNodeTypeChange,
+    handleNodeDescriptionChange,
+    handleEventConfigChange,
+  ]);
+
   // Cleanup webcam and video processing on unmount
   // Cleanup on unmount only - don't interfere with active camera
   useEffect(() => {
@@ -1379,6 +1465,36 @@ export function ProjectView({ project, onBack }) {
               <h3 className="text-white font-semibold mb-3 text-sm">
                 Node Palette
               </h3>
+              
+              {/* AI Create Nodes Button */}
+              <div
+                onClick={() => setIsAiDialogOpen(true)}
+                className="px-2 py-1.5 mb-2 bg-gray-900 border-[3px] rounded cursor-pointer hover:bg-gray-800 transition-colors relative overflow-hidden"
+                style={{
+                  borderImage: "linear-gradient(90deg, #9333ea, #2563eb, #9333ea, #2563eb) 1",
+                  borderImageSlice: 1,
+                  animation: "gradient-shift 3s linear infinite",
+                  backgroundSize: "200% 100%",
+                }}
+              >
+                <style>{`
+                  @keyframes gradient-shift {
+                    0% { border-image-source: linear-gradient(90deg, #9333ea, #2563eb, #9333ea, #2563eb); }
+                    50% { border-image-source: linear-gradient(90deg, #2563eb, #9333ea, #2563eb, #9333ea); }
+                    100% { border-image-source: linear-gradient(90deg, #9333ea, #2563eb, #9333ea, #2563eb); }
+                  }
+                `}</style>
+                <div className="flex items-center gap-1.5">
+                  <IconSparkles size={14} className="text-purple-400" />
+                  <div className="text-white text-xs font-medium">
+                    AI Create
+                  </div>
+                </div>
+                <div className="text-gray-400 text-[10px] mt-0.5">
+                  Generate with AI
+                </div>
+              </div>
+              
               {paletteNodeTypes.map((nodeType) => {
                 // Get border color based on node type
                 let borderColor = "#6b7280"; // Default gray
@@ -1397,13 +1513,13 @@ export function ProjectView({ project, onBack }) {
                     key={nodeType.type}
                     draggable
                     onDragStart={(e) => onDragStart(e, nodeType.type)}
-                    className="px-3 py-2 mb-2 bg-gray-900 border-2 rounded cursor-move hover:bg-gray-800 transition-colors"
+                    className="px-2 py-1.5 mb-2 bg-gray-900 border-2 rounded cursor-move hover:bg-gray-800 transition-colors"
                     style={{ borderColor }}
                   >
                     <div className="text-white text-xs font-medium">
                       {nodeType.label}
                     </div>
-                    <div className="text-gray-400 text-xs mt-1">
+                    <div className="text-gray-400 text-[10px] mt-0.5">
                       {nodeType.description}
                     </div>
                   </div>
@@ -1662,6 +1778,96 @@ export function ProjectView({ project, onBack }) {
               className="rounded-none"
             >
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog for AI prompt parsing */}
+      <Dialog open={isAiDialogOpen} onOpenChange={setIsAiDialogOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <IconSparkles className="h-5 w-5 text-purple-500" />
+              AI Node Creator
+            </DialogTitle>
+            <DialogDescription>
+              Describe what you want to detect and what actions to take. AI will
+              create the nodes and connect them automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-4">
+            <div className="flex flex-col gap-2">
+              <label htmlFor="ai-prompt" className="text-sm font-medium text-black">
+                Your Automation Request
+              </label>
+              <textarea
+                id="ai-prompt"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="Example: Alert me via email when motion is detected at night"
+                className="min-h-[120px] w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+                disabled={isParsingPrompt}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Try: "Send me a text if a package is delivered" or "Notify
+                security when someone enters the parking lot after hours"
+              </p>
+            </div>
+
+            {aiError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
+                {aiError}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsAiDialogOpen(false);
+                setAiPrompt("");
+                setAiError(null);
+              }}
+              disabled={isParsingPrompt}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAiPromptParse}
+              disabled={isParsingPrompt || !aiPrompt.trim()}
+              className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white"
+            >
+              {isParsingPrompt ? (
+                <>
+                  <span className="mr-2">Creating...</span>
+                  <svg
+                    className="animate-spin h-4 w-4"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                </>
+              ) : (
+                <>
+                  <IconSparkles size={16} className="mr-2" />
+                  Create Nodes
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
