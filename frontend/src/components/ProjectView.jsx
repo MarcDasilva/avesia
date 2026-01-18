@@ -26,6 +26,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { projectsAPI } from "../lib/api";
 
 // Custom node component
 const CustomNode = ({ data, selected }) => {
@@ -67,7 +68,11 @@ export function ProjectView({ project, onBack }) {
   const [videos, setVideos] = useState([]); // Array of video sources (file URLs or camera streams)
   const [webcamStream, setWebcamStream] = useState(null);
   const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const [hoveredVideoIndex, setHoveredVideoIndex] = useState(null);
+  const [isLoadingVideos, setIsLoadingVideos] = useState(true);
   const fileInputRef = useRef(null);
+  const videoRefs = useRef({}); // Refs for video elements to control playback
+  const blobUrlsRef = useRef([]); // Track blob URLs for cleanup
 
   const onConnect = useCallback(
     (params) => {
@@ -141,25 +146,68 @@ export function ProjectView({ project, onBack }) {
   };
 
   // Handle file upload
-  const handleFileUpload = (event) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     // Check if it's a video file (mp4, webm, etc.)
     if (file.type.startsWith("video/")) {
-      const videoUrl = URL.createObjectURL(file);
-      setVideos((prev) => [
-        ...prev,
-        { type: "file", url: videoUrl, name: file.name },
-      ]);
+      try {
+        console.log("Uploading video:", file.name, file.type);
+        // Upload to backend
+        const uploadResult = await projectsAPI.uploadVideo(project.id, file);
+        console.log("Upload result:", uploadResult);
 
-      // TODO: Upload file to backend/database
-      // const formData = new FormData();
-      // formData.append("video", file);
-      // formData.append("projectId", project.id);
-      // await uploadVideoToBackend(formData);
+        // Small delay to ensure MongoDB update is committed
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
-      setIsDialogOpen(false);
+        // Reload videos from backend to get the new video with proper blob URL
+        const projectData = await projectsAPI.getById(project.id);
+        console.log("Project data after upload:", projectData);
+        console.log("Does projectData have videos?", "videos" in projectData);
+        console.log("Full projectData keys:", Object.keys(projectData));
+        const projectVideos = projectData.videos || [];
+        console.log(
+          "Videos after upload:",
+          projectVideos.length,
+          projectVideos
+        );
+
+        // Convert backend video data to frontend format with blob URLs
+        const loadedVideos = await Promise.all(
+          projectVideos.map(async (video) => {
+            try {
+              // Fetch video as blob with authentication and create blob URL
+              const blobUrl = await projectsAPI.getVideoBlobUrl(
+                project.id,
+                video.id
+              );
+              blobUrlsRef.current.push(blobUrl);
+              return {
+                type: "file",
+                url: blobUrl,
+                name: video.filename,
+                videoId: video.id,
+              };
+            } catch (error) {
+              console.error(`Error loading video ${video.id}:`, error);
+              // Fallback to regular URL if blob fetch fails
+              return {
+                type: "file",
+                url: projectsAPI.getVideoUrl(project.id, video.id),
+                name: video.filename,
+                videoId: video.id,
+              };
+            }
+          })
+        );
+
+        setVideos(loadedVideos);
+        setIsDialogOpen(false);
+      } catch (error) {
+        console.error("Error uploading video:", error);
+        alert(`Failed to upload video: ${error.message}`);
+      }
     } else {
       alert("Please select a video file (mp4, webm, etc.)");
     }
@@ -194,20 +242,146 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
+  // Load videos from backend when project is loaded
+  useEffect(() => {
+    const loadVideos = async () => {
+      setIsLoadingVideos(true);
+
+      // Cleanup previous blob URLs
+      blobUrlsRef.current.forEach((url) => {
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url);
+        }
+      });
+      blobUrlsRef.current = [];
+
+      try {
+        console.log("Loading videos for project:", project.id);
+        const projectData = await projectsAPI.getById(project.id);
+        console.log("Project data received:", projectData);
+        console.log(
+          "Full project data structure:",
+          JSON.stringify(projectData, null, 2)
+        );
+        const projectVideos = projectData.videos || [];
+        console.log("Videos found:", projectVideos.length, projectVideos);
+
+        if (projectVideos.length === 0) {
+          console.log("No videos found in project");
+          setVideos([]);
+          setIsLoadingVideos(false);
+          return;
+        }
+
+        // Convert backend video data to frontend format with blob URLs
+        const loadedVideos = await Promise.all(
+          projectVideos.map(async (video) => {
+            try {
+              console.log(`Loading video: ${video.id} - ${video.filename}`);
+              // Fetch video as blob with authentication and create blob URL
+              const blobUrl = await projectsAPI.getVideoBlobUrl(
+                project.id,
+                video.id
+              );
+              console.log(`Video blob URL created for ${video.id}:`, blobUrl);
+              blobUrlsRef.current.push(blobUrl);
+              return {
+                type: "file",
+                url: blobUrl,
+                name: video.filename,
+                videoId: video.id,
+              };
+            } catch (error) {
+              console.error(`Error loading video ${video.id} as blob:`, error);
+              // Try using direct URL with authentication token in query param as fallback
+              try {
+                const { supabase } = await import("../lib/supabase.js");
+                const {
+                  data: { session },
+                } = await supabase.auth.getSession();
+
+                if (session?.user?.id) {
+                  // Add user ID as query param for authentication
+                  const videoUrl = `${projectsAPI.getVideoUrl(
+                    project.id,
+                    video.id
+                  )}?userId=${session.user.id}`;
+                  console.log(`Using fallback URL for ${video.id}:`, videoUrl);
+                  return {
+                    type: "file",
+                    url: videoUrl,
+                    name: video.filename,
+                    videoId: video.id,
+                  };
+                }
+              } catch (fallbackError) {
+                console.error(`Error creating fallback URL:`, fallbackError);
+              }
+
+              // Last resort: regular URL (may fail due to auth, but worth trying)
+              return {
+                type: "file",
+                url: projectsAPI.getVideoUrl(project.id, video.id),
+                name: video.filename,
+                videoId: video.id,
+              };
+            }
+          })
+        );
+
+        console.log("Loaded videos:", loadedVideos);
+        setVideos(loadedVideos);
+      } catch (error) {
+        console.error("Error loading videos:", error);
+        setVideos([]);
+      } finally {
+        setIsLoadingVideos(false);
+      }
+    };
+
+    if (project.id) {
+      loadVideos();
+    }
+
+    // Cleanup blob URLs on unmount or when project changes
+    return () => {
+      blobUrlsRef.current.forEach((url) => {
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url);
+        }
+      });
+      blobUrlsRef.current = [];
+    };
+  }, [project.id]);
+
+  // Function to play video with fallback to muted if needed
+  const playVideoWithFallback = async (videoElement) => {
+    try {
+      // Try to play with sound first
+      videoElement.muted = false;
+      await videoElement.play();
+    } catch (error) {
+      // If autoplay with sound is blocked, try muted
+      try {
+        videoElement.muted = true;
+        await videoElement.play();
+      } catch (mutedError) {
+        // Autoplay may be blocked by browser policy
+        console.log("Autoplay prevented:", mutedError);
+      }
+    }
+  };
+
   // Cleanup webcam on unmount
   useEffect(() => {
     return () => {
       if (webcamStream) {
         webcamStream.getTracks().forEach((track) => track.stop());
       }
-      // Clean up file URLs
-      videos.forEach((video) => {
-        if (video.type === "file" && video.url) {
-          URL.revokeObjectURL(video.url);
-        }
-      });
+      // Note: We don't need to revoke URLs for backend videos
+      // Only revoke blob URLs if we add any
     };
-  }, []);
+  }, [webcamStream]);
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -236,19 +410,58 @@ export function ProjectView({ project, onBack }) {
         >
           <div className="p-4 h-full">
             {/* Display videos if any */}
-            {videos.length > 0 ? (
-              <div className="grid grid-cols-2 gap-4 h-full">
+            {isLoadingVideos ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-white">Loading videos...</div>
+              </div>
+            ) : videos.length > 0 ? (
+              <div className="flex flex-wrap justify-center items-center gap-6 h-full p-4">
                 {videos.map((video, index) => (
                   <div
                     key={index}
-                    className="relative bg-black rounded overflow-hidden"
+                    className="relative bg-gray-900 rounded-lg overflow-hidden border-2 border-gray-600 shadow-lg video-container"
+                    style={{
+                      maxWidth: "600px",
+                      width: "100%",
+                      aspectRatio: "16/9",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                    onMouseEnter={() => setHoveredVideoIndex(index)}
+                    onMouseLeave={() => setHoveredVideoIndex(null)}
                   >
                     {video.type === "file" ? (
                       <video
+                        ref={(el) => {
+                          videoRefs.current[`video-${index}`] = el;
+                          if (el) {
+                            // Ensure video plays when element is mounted
+                            const playVideo = async () => {
+                              await playVideoWithFallback(el);
+                            };
+
+                            // If video is already loaded, play immediately
+                            if (el.readyState >= 2) {
+                              playVideo();
+                            } else {
+                              // Otherwise, wait for video to load
+                              const handleCanPlay = () => {
+                                playVideo();
+                                el.removeEventListener(
+                                  "canplay",
+                                  handleCanPlay
+                                );
+                              };
+                              el.addEventListener("canplay", handleCanPlay);
+                            }
+                          }
+                        }}
                         src={video.url}
-                        controls
+                        controls={hoveredVideoIndex === index}
+                        autoPlay
+                        playsInline
                         className="w-full h-full object-contain"
-                        style={{ maxHeight: "100%" }}
                       >
                         Your browser does not support the video tag.
                       </video>
@@ -262,7 +475,6 @@ export function ProjectView({ project, onBack }) {
                         autoPlay
                         playsInline
                         className="w-full h-full object-contain"
-                        style={{ maxHeight: "100%" }}
                       >
                         Your browser does not support the video tag.
                       </video>
@@ -270,7 +482,7 @@ export function ProjectView({ project, onBack }) {
                     {video.type === "webcam" && (
                       <button
                         onClick={stopWebcam}
-                        className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                        className="absolute top-3 right-3 bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700 text-sm shadow-lg z-10"
                       >
                         Stop Camera
                       </button>

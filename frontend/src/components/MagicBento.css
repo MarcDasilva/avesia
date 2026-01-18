@@ -235,3 +235,41 @@
   position: relative;
   user-select: none;
 }
+
+/* Video controls hide/show on hover */
+.video-container video::-webkit-media-controls-enclosure {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover video::-webkit-media-controls-enclosure {
+  opacity: 1;
+}
+
+.video-container video::-webkit-media-controls-panel {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover video::-webkit-media-controls-panel {
+  opacity: 1;
+}
+
+.video-container video::-webkit-media-controls-play-button {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover video::-webkit-media-controls-play-button {
+  opacity: 1;
+}
+
+/* For non-webkit browsers */
+.video-hover-controls::-webkit-media-controls {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover .video-hover-controls::-webkit-media-controls {
+  opacity: 1;
+}
