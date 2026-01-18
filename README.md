@@ -395,22 +395,12 @@ Define what the system should detect:
 - `backend/ATLAS_SETUP.md` - MongoDB Atlas setup guide
 - `backend/SETUP_ENV.md` - Environment variable reference
 - `frontend/SUPABASE_SETUP.md` - Supabase authentication setup
-- `NODE_IMPLEMENTATION_PLAN.md` - Node system architecture details
 
-## 🤝 Contributing
-
-1. Create a feature branch
-2. Make your changes
-3. Write/update tests as needed
-4. Submit a pull request
-
-## 📄 License
-
-[Add your license here]
 
 ## 🙏 Acknowledgments
 
 - Overshoot SDK for video analysis capabilities
+- shadcn
 - Supabase for authentication infrastructure
 - MongoDB Atlas for database hosting
 - React Flow for visual node editor
