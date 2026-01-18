@@ -4,7 +4,7 @@ Combines Overshoot SDK/Node system and MongoDB/Projects API
 """
 from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Form, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Dict, Any
 from enum import Enum
@@ -32,9 +32,10 @@ app = FastAPI(title="Avesia Backend API", version="1.0.0")
 
 # CORS middleware - combine configurations
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+# Note: Cannot use "*" with allow_credentials=True - must specify origins explicitly
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "*"],  # Allow frontend and all origins for development
+    allow_origins=[frontend_url, "http://localhost:5173", "http://localhost:3000"],  # Explicit origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -187,10 +188,12 @@ def convert_nodes_to_output_schema(nodes: List[Node]) -> Dict[str, Any]:
             "properties": {
                 "has_person": {"type": "boolean"},
                 "has_person_description": {"type": "string"}
-            }
+            },
+            "required": ["has_person", "has_person_description"]
         }
     """
     properties = {}
+    required_fields = []
     
     for i, node in enumerate(nodes):
         # Use node.name if provided, otherwise generate a name from index
@@ -200,39 +203,52 @@ def convert_nodes_to_output_schema(nodes: List[Node]) -> Dict[str, Any]:
         if node.datatype == NodeDataType.BOOLEAN:
             properties[field_name] = {
                 "type": "boolean",
-                "description": f"Whether the condition '{node.prompt}' is true"
+                "description": f"CRITICAL: Evaluate '{node.prompt}'. Return true ONLY if condition is fully satisfied. Return false if count < threshold. For 'at least 2': return false if count is 0 or 1, true only if count >= 2."
             }
             # Add a description field for explaining why it's true
-            properties[f"{field_name}_description"] = {
+            description_field_name = f"{field_name}_description"
+            properties[description_field_name] = {
                 "type": "string",
-                "description": f"Detailed explanation of why '{node.prompt}' is true or false"
+                "description": f"REQUIRED: State the actual count/measurement first, then explain. Use phrases like 'count is X' or 'there are X'. If count < threshold, explicitly say 'not enough' or 'less than threshold' and the boolean MUST be false. If count >= threshold, say 'enough' or 'meets requirement' and boolean MUST be true."
             }
+            # Mark both fields as required
+            required_fields.extend([field_name, description_field_name])
         elif node.datatype == NodeDataType.INTEGER:
             properties[field_name] = {
                 "type": "integer",
                 "description": node.prompt
             }
+            required_fields.append(field_name)
         elif node.datatype == NodeDataType.NUMBER:
             properties[field_name] = {
                 "type": "number",
                 "description": node.prompt
             }
+            required_fields.append(field_name)
         elif node.datatype == NodeDataType.STRING:
             properties[field_name] = {
                 "type": "string",
                 "description": node.prompt
             }
+            required_fields.append(field_name)
         else:
             # Default to string if unknown type
             properties[field_name] = {
                 "type": "string",
                 "description": node.prompt
             }
+            required_fields.append(field_name)
     
-    return {
+    schema = {
         "type": "object",
         "properties": properties
     }
+    
+    # Only add required if there are required fields
+    if required_fields:
+        schema["required"] = required_fields
+    
+    return schema
 
 
 def create_combined_prompt(nodes: List[Node]) -> str:
@@ -246,10 +262,12 @@ def create_combined_prompt(nodes: List[Node]) -> str:
         ]
         Output: "Analyze the image quickly: 1. Is there a person? Explain why. 2. Count the cans."
     """
+    has_boolean = any(node.datatype == NodeDataType.BOOLEAN for node in nodes)
+    
     if len(nodes) == 1:
         prompt = nodes[0].prompt
         if nodes[0].datatype == NodeDataType.BOOLEAN:
-            return f"{prompt} Provide a brief explanation."
+            return f"{prompt} Explain why in the description field."
         return prompt
     
     prompts = []
@@ -415,7 +433,9 @@ async def send_nodes_to_nodejs_async(nodes_with_ids, output_schema, combined_pro
 @app.on_event("startup")
 async def startup_event():
     """Initialize nodes when server starts"""
-    await initialize_nodes_on_startup()
+    # Don't auto-load nodes from sample_nodes.json - nodes should come from activated projects
+    # await initialize_nodes_on_startup()
+    print("🚀 Server started - nodes will be loaded when projects are activated")
 
 # ============================================================================
 # Root and Health Endpoints
@@ -490,6 +510,56 @@ async def receive_result(result: Result):
     try:
         parsed_result = json.loads(result.result)
         is_json = True
+        
+        # Validate and correct boolean values that don't match their descriptions
+        if isinstance(parsed_result, dict):
+            for key, value in list(parsed_result.items()):
+                if isinstance(value, bool) and f"{key}_description" in parsed_result:
+                    description = parsed_result[f"{key}_description"]
+                    if isinstance(description, str):
+                        desc_lower = description.lower()
+                        
+                        # STRONGER false indicators - if ANY of these appear, it MUST be false
+                        false_indicators = [
+                            "not enough", "not sufficient", "insufficient", 
+                            "less than", "below", "fewer than", "below threshold",
+                            "does not meet", "doesn't meet", "fails to meet",
+                            "the statement is false", "this is false", "false",
+                            "is 0", "is 1", "count is 0", "count is 1",
+                            "0 cans", "1 can", "1 can", "only 1", "only one",
+                            "less than 2", "below 2", "under 2",
+                            "does not satisfy", "doesn't satisfy",
+                            "condition not met", "threshold not reached"
+                        ]
+                        
+                        # STRONGER true indicators - if these appear, it should be true
+                        true_indicators = [
+                            "enough", "sufficient", "meets", "satisfies",
+                            "at least", "greater than or equal", ">= ", ">=",
+                            "the statement is true", "this is true", "true",
+                            "2 or more", "2+", "meets requirement",
+                            "condition met", "threshold reached"
+                        ]
+                        
+                        # Check for numeric comparisons in description
+                        import re
+                        # Look for patterns like "count is 1" or "there is 1" followed by something that indicates false
+                        count_pattern = r'(\d+)\s+(can|cans|item|items|object|objects|person|people)'
+                        count_matches = re.findall(count_pattern, desc_lower)
+                        
+                        # If description has a number less than threshold and says "not enough", it's false
+                        has_false_keyword = any(indicator in desc_lower for indicator in false_indicators)
+                        has_true_keyword = any(indicator in desc_lower for indicator in true_indicators)
+                        
+                        # PRIORITY: If description explicitly says false keywords, override true keywords
+                        if has_false_keyword and value:
+                            print(f"⚠️  Correcting {key}: description contains false indicators but boolean is true")
+                            print(f"   Description: {description[:100]}...")
+                            parsed_result[key] = False
+                        elif has_true_keyword and not has_false_keyword and not value:
+                            print(f"⚠️  Correcting {key}: description says true but boolean is false")
+                            parsed_result[key] = True
+                            
     except (json.JSONDecodeError, TypeError):
         parsed_result = result.result
     
@@ -539,8 +609,9 @@ async def get_results(limit: int = 10):
 @app.post("/api/nodes")
 async def update_nodes(nodes_update: NodesUpdate):
     """
-    Update the nodes configuration
+    Update the nodes configuration (Legacy endpoint - use activate_project_nodes instead)
     This sends the nodes to the Node.js service to configure Overshoot SDK
+    NOTE: This endpoint should not be used for workflow nodes - use POST /api/projects/{project_id}/nodes/activate instead
     """
     if not nodes_update.nodes:
         raise HTTPException(status_code=400, detail="At least one node is required")
@@ -554,6 +625,8 @@ async def update_nodes(nodes_update: NodesUpdate):
         node_dict["name"] = node_dict.get("name") or node_dict["id"]
         nodes_with_ids.append(node_dict)
     
+    # Only update if explicitly called - don't clear workflow nodes
+    # For workflow nodes, use activate_project_nodes() instead
     nodes_store.clear()
     nodes_store.extend(nodes_with_ids)
     
@@ -595,18 +668,11 @@ async def get_nodes():
     print("📡 CAMERA REQUESTING NODES (Camera is starting)")
     print("="*70)
     
-    # If nodes_store is empty, reload from file
+    # Do not fallback to sample_nodes.json - if nodes_store is empty, return empty
+    # This prevents loading fake/sample nodes when saved nodes fail
     if not nodes_store:
-        print("⚠️  nodes_store is empty, loading from file...")
-        nodes, output_schema, combined_prompt = load_nodes_from_file()
-        nodes_with_ids = []
-        for i, node in enumerate(nodes):
-            node_dict = node.dict()
-            if not node_dict.get("id"):
-                node_dict["id"] = node_dict.get("name") or f"node_{i}"
-            node_dict["name"] = node_dict.get("name") or node_dict["id"]
-            nodes_with_ids.append(node_dict)
-        nodes_store.extend(nodes_with_ids)
+        print("⚠️  nodes_store is empty - no nodes available")
+        print("   NOTE: Activate a project to load nodes, or save nodes first")
     else:
         print(f"✅ Using existing nodes_store with {len(nodes_store)} nodes")
     
@@ -1419,48 +1485,23 @@ async def get_project_prompt(
     }
 
 
-@app.put("/api/projects/{project_id}/nodes")
-async def save_project_nodes(
-    project_id: str,
-    nodes_data: Dict[str, Any],
-    userId: str = Header(None, alias="X-User-Id")
-):
-    """Save nodes configuration for a project"""
-    if not userId:
-        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
-    
-    if db is None:
-        raise HTTPException(status_code=503, detail="MongoDB is not connected")
-    
+async def activate_project_nodes(nodes_data: Dict[str, Any]) -> bool:
+    """
+    Helper function to process nodes and update global nodes_store.
+    Used by both save_project_nodes and activate_project_nodes endpoints.
+    Returns True if successful, False otherwise.
+    """
     try:
-        object_id = ObjectId(project_id)
-    except (InvalidId, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid project ID")
+        from Nodes.node_processing import process_listeners
+    except ImportError:
+        try:
+            from nodes.node_processing import process_listeners
+        except ImportError as e:
+            print(f"\n❌ ERROR importing process_listeners: {e}")
+            return False
     
-    # Verify project exists and belongs to user
-    project = db.projects.find_one({"_id": object_id, "userId": userId})
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Update project with nodes configuration
-    db.projects.update_one(
-        {"_id": object_id, "userId": userId},
-        {
-            "$set": {
-                "nodes": nodes_data,
-                "updatedAt": datetime.utcnow()
-            }
-        }
-    )
-    
-    # Process nodes and update global nodes_store so camera uses the saved nodes
-    print("\n" + "="*70)
-    print("💾 NODES SAVED - Processing and updating global nodes_store")
-    print("="*70)
-    print("\n📥 RECEIVED NODES DATA:")
-    print(json.dumps(nodes_data, indent=2))
-    
-    from nodes.node_processing import process_listeners
+    if not process_listeners:
+        return False
     
     try:
         # Process the nodes using node_processing.py
@@ -1470,48 +1511,273 @@ async def save_project_nodes(
         print(f"\n📋 PROCESSED NODES ({len(processed_nodes)} nodes):")
         print(json.dumps(processed_nodes, indent=2))
         
-        # Update global nodes_store
+        # Deduplicate nodes by name/id to prevent duplicates
+        seen_names = set()
+        deduplicated_nodes = []
+        for node in processed_nodes:
+            node_name = node.get("name") or node.get("id")
+            if node_name and node_name not in seen_names:
+                seen_names.add(node_name)
+                deduplicated_nodes.append(node)
+            elif not node_name:
+                # If no name/id, still add it but with a warning
+                deduplicated_nodes.append(node)
+        
+        if len(processed_nodes) != len(deduplicated_nodes):
+            print(f"\n⚠️  Removed {len(processed_nodes) - len(deduplicated_nodes)} duplicate nodes")
+        
+        # Update global nodes_store (this is the correct way to set workflow nodes)
+        print(f"\n📝 Clearing nodes_store and setting {len(deduplicated_nodes)} workflow nodes from project")
         nodes_store.clear()
-        nodes_store.extend(processed_nodes)
+        nodes_store.extend(deduplicated_nodes)
         
-        print(f"\n✅ Updated global nodes_store with {len(processed_nodes)} nodes")
+        print(f"\n✅ Updated global nodes_store with {len(deduplicated_nodes)} nodes")
         
-        # Generate the combined prompt and schema for logging
-        if processed_nodes:
+        # Generate the combined prompt and schema
+        if deduplicated_nodes:
             # Convert processed nodes to Node objects for schema generation
             node_objects = []
-            for node in processed_nodes:
-                node_objects.append(Node(
-                    id=node.get("name"),
-                    prompt=node.get("prompt"),
-                    datatype=NodeDataType(node.get("datatype", "boolean")),
-                    name=node.get("name")
-                ))
+            for node in deduplicated_nodes:
+                try:
+                    node_objects.append(Node(
+                        id=node.get("name"),
+                        prompt=node.get("prompt"),
+                        datatype=NodeDataType(node.get("datatype", "boolean")),
+                        name=node.get("name")
+                    ))
+                except Exception as e:
+                    print(f"⚠️  Skipping invalid node: {e}")
+                    continue
             
-            output_schema = convert_nodes_to_output_schema(node_objects)
-            combined_prompt = create_combined_prompt(node_objects)
-            
-            print(f"\n🎯 COMBINED PROMPT:")
-            print(combined_prompt)
-            print("="*70 + "\n")
-            
-            # Send updated nodes to Node.js service
-            await send_nodes_to_nodejs(processed_nodes, output_schema, combined_prompt)
-        else:
-            print("⚠️  No nodes to process from saved project")
-            print("="*70 + "\n")
-            
+            if node_objects:
+                output_schema = convert_nodes_to_output_schema(node_objects)
+                combined_prompt = create_combined_prompt(node_objects)
+                
+                print(f"\n🎯 COMBINED PROMPT:")
+                print(combined_prompt)
+                print("="*70 + "\n")
+                
+                # Send updated nodes to Node.js service (non-blocking)
+                try:
+                    await send_nodes_to_nodejs(deduplicated_nodes, output_schema, combined_prompt)
+                except Exception as e:
+                    print(f"⚠️  Failed to send nodes to Node.js service: {e}")
+        
+        return True
     except Exception as e:
         print(f"\n❌ ERROR processing nodes: {e}")
         import traceback
         traceback.print_exc()
-        print("="*70 + "\n")
+        return False
+
+
+@app.post("/api/projects/{project_id}/nodes/activate")
+async def activate_project_nodes_endpoint(
+    project_id: str,
+    request: Request,
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """
+    Activate a project's nodes by loading them from the project and updating nodes_store.
+    This is called when a project is opened so the camera uses the project's nodes.
+    """
+    origin = request.headers.get("origin") or frontend_url or "http://localhost:5173"
     
-    return {
+    try:
+        if not userId:
+            raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+        
+        if db is None:
+            raise HTTPException(status_code=503, detail="MongoDB is not connected")
+        
+        try:
+            object_id = ObjectId(project_id)
+        except (InvalidId, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid project ID")
+        
+        # Verify project exists and belongs to user
+        project = db.projects.find_one({"_id": object_id, "userId": userId})
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get nodes from project
+        nodes_data = project.get("nodes")
+        if not nodes_data or not nodes_data.get("listeners"):
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": "Project has no nodes to activate",
+                    "nodes_activated": False
+                },
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+        
+        # Process nodes and update global nodes_store
+        print("\n" + "="*70)
+        print(f"🔌 ACTIVATING PROJECT NODES - Project: {project_id}")
+        print("="*70)
+        print("\n📥 LOADING NODES FROM PROJECT:")
+        print(json.dumps(nodes_data, indent=2))
+        
+        success = await activate_project_nodes(nodes_data)
+        
+        if success:
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": "Project nodes activated successfully",
+                    "nodes_activated": True
+                },
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+        else:
+            return JSONResponse(
+                content={
+                    "success": False,
+                    "message": "Failed to process project nodes",
+                    "nodes_activated": False
+                },
+                status_code=500,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                }
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"\n❌ UNEXPECTED ERROR in activate_project_nodes: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": f"Internal server error: {str(e)}",
+                "error": str(e)
+            },
+            status_code=500,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+
+
+@app.put("/api/projects/{project_id}/nodes")
+async def save_project_nodes(
+    project_id: str,
+    nodes_data: Dict[str, Any],
+    request: Request,
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Save nodes configuration for a project"""
+    # Get origin for CORS headers - always set this first
+    origin = request.headers.get("origin") or frontend_url or "http://localhost:5173"
+    
+    try:
+        if not userId:
+            raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+        
+        if db is None:
+            raise HTTPException(status_code=503, detail="MongoDB is not connected")
+        
+        try:
+            object_id = ObjectId(project_id)
+        except (InvalidId, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid project ID")
+        
+        # Verify project exists and belongs to user
+        project = db.projects.find_one({"_id": object_id, "userId": userId})
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Update project with nodes configuration
+        db.projects.update_one(
+            {"_id": object_id, "userId": userId},
+            {
+                "$set": {
+                    "nodes": nodes_data,
+                    "updatedAt": datetime.utcnow()
+                }
+            }
+        )
+        
+        # Process nodes and update global nodes_store so camera uses the saved nodes
+        print("\n" + "="*70)
+        print("💾 NODES SAVED - Processing and updating global nodes_store")
+        print("="*70)
+        print("\n📥 RECEIVED NODES DATA:")
+        print(json.dumps(nodes_data, indent=2))
+        
+        # Use the helper function to activate nodes (this updates nodes_store)
+        nodes_store_update_success = await activate_project_nodes(nodes_data)
+        if not nodes_store_update_success:
+            print("⚠️  Warning: Failed to process nodes, but nodes were still saved to database")
+        else:
+            print(f"✅ Nodes processed and nodes_store updated with {len(nodes_store)} nodes")
+    
+    except HTTPException:
+        # Re-raise HTTPExceptions so FastAPI can handle them with CORS middleware
+        raise
+    except Exception as e:
+        # Catch any other unhandled exceptions and return error with CORS headers
+        print(f"\n❌ UNEXPECTED ERROR in save_project_nodes: {e}")
+        import traceback
+        traceback.print_exc()
+        print("="*70 + "\n")
+        
+        error_response = JSONResponse(
+            content={
+                "success": False,
+                "message": f"Internal server error: {str(e)}",
+                "error": str(e)
+            },
+            status_code=500,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "PUT, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+        return error_response
+    
+    # Create response with explicit CORS headers
+    response_data = {
         "success": True,
-        "message": "Nodes saved successfully",
-        "nodes": nodes_data
+        "message": "Nodes saved successfully" + (" and nodes_store updated" if nodes_store_update_success else " (nodes_store update failed)"),
+        "nodes": nodes_data,
+        "nodes_store_updated": nodes_store_update_success,
+        "nodes_count": len(nodes_store) if nodes_store_update_success else 0
     }
+    
+    response = JSONResponse(
+        content=response_data,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "PUT, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+    
+    return response
 
 
 # ============================================================================
