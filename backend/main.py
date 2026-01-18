@@ -93,7 +93,7 @@ except Exception as e:
 # ============================================================================
 # Overshoot SDK / Node System Configuration
 # ============================================================================
-NODE_SERVICE_URL = os.getenv("NODE_SERVICE_URL", "http://localhost:3001")
+NODE_SERVICE_URL = os.getenv("NODE_SERVICE_URL", "http://localhost:3001").rstrip("/")
 OVERSHOOT_API_KEY = os.getenv("OVERSHOOT_API_KEY", "")
 OVERSHOOT_API_URL = os.getenv("OVERSHOOT_API_URL", "https://cluster1.overshoot.ai/api/v0.2")
 
@@ -185,7 +185,8 @@ def convert_nodes_to_output_schema(nodes: List[Node]) -> Dict[str, Any]:
         Output: {
             "type": "object",
             "properties": {
-                "has_person": {"type": "boolean"}
+                "has_person": {"type": "boolean"},
+                "has_person_description": {"type": "string"}
             }
         }
     """
@@ -197,16 +198,36 @@ def convert_nodes_to_output_schema(nodes: List[Node]) -> Dict[str, Any]:
         
         # Map Python datatype to JSON schema type
         if node.datatype == NodeDataType.BOOLEAN:
-            properties[field_name] = {"type": "boolean"}
+            properties[field_name] = {
+                "type": "boolean",
+                "description": f"Whether the condition '{node.prompt}' is true"
+            }
+            # Add a description field for explaining why it's true
+            properties[f"{field_name}_description"] = {
+                "type": "string",
+                "description": f"Detailed explanation of why '{node.prompt}' is true or false"
+            }
         elif node.datatype == NodeDataType.INTEGER:
-            properties[field_name] = {"type": "integer"}
+            properties[field_name] = {
+                "type": "integer",
+                "description": node.prompt
+            }
         elif node.datatype == NodeDataType.NUMBER:
-            properties[field_name] = {"type": "number"}
+            properties[field_name] = {
+                "type": "number",
+                "description": node.prompt
+            }
         elif node.datatype == NodeDataType.STRING:
-            properties[field_name] = {"type": "string"}
+            properties[field_name] = {
+                "type": "string",
+                "description": node.prompt
+            }
         else:
             # Default to string if unknown type
-            properties[field_name] = {"type": "string"}
+            properties[field_name] = {
+                "type": "string",
+                "description": node.prompt
+            }
     
     return {
         "type": "object",
@@ -223,16 +244,22 @@ def create_combined_prompt(nodes: List[Node]) -> str:
             Node(prompt="Is there a person?", datatype="boolean", name="has_person"),
             Node(prompt="Count the cans", datatype="integer", name="can_count")
         ]
-        Output: "1. Is there a person? 2. Count the cans"
+        Output: "Analyze the image quickly: 1. Is there a person? Explain why. 2. Count the cans."
     """
     if len(nodes) == 1:
-        return nodes[0].prompt
+        prompt = nodes[0].prompt
+        if nodes[0].datatype == NodeDataType.BOOLEAN:
+            return f"{prompt} Provide a brief explanation."
+        return prompt
     
     prompts = []
     for i, node in enumerate(nodes, 1):
-        prompts.append(f"{i}. {node.prompt}")
+        if node.datatype == NodeDataType.BOOLEAN:
+            prompts.append(f"{i}. {node.prompt} Explain why.")
+        else:
+            prompts.append(f"{i}. {node.prompt}")
     
-    return " ".join(prompts)
+    return "Analyze quickly: " + " ".join(prompts)
 
 
 def load_nodes_from_file() -> tuple:
@@ -285,33 +312,72 @@ async def send_nodes_to_nodejs(nodes_with_ids, output_schema, combined_prompt, r
     max_retries = 2  # Reduced from 5 to fail faster
     retry_delay = 1  # Reduced from 2 to fail faster
     
+    print(f"\n🔄 Attempting to send nodes to Node.js Overshoot service at {NODE_SERVICE_URL}")
+    
     try:
         async with httpx.AsyncClient() as client:
+            payload = {
+                "nodes": nodes_with_ids,
+                "outputSchema": output_schema,
+                "prompt": combined_prompt
+            }
+            
+            print(f"📤 Sending payload to {NODE_SERVICE_URL}/api/nodes")
+            print(f"   Nodes: {len(nodes_with_ids)}")
+            print(f"   Prompt length: {len(combined_prompt)} chars")
+            
             response = await client.post(
                 f"{NODE_SERVICE_URL}/api/nodes",
-                json={
-                    "nodes": nodes_with_ids,
-                    "outputSchema": output_schema,
-                    "prompt": combined_prompt
-                },
-                timeout=2.0  # Reduced from 5.0 to fail faster
+                json=payload,
+                timeout=5.0
             )
+            
+            print(f"📥 Response status: {response.status_code}")
+            
             response.raise_for_status()
+            
+            response_data = response.json()
+            print(f"✅ Node.js service response: {json.dumps(response_data, indent=2)}")
+            
             if nodes_with_ids:
-                print(f"✅ Nodes sent to Node.js service: {len(nodes_with_ids)} nodes")
-                print(f"   Prompt: {combined_prompt[:80]}...")
+                print("\n" + "="*70)
+                print(f"✅ PROMPT SUCCESSFULLY SENT TO OVERSHOOT ({len(nodes_with_ids)} nodes)")
+                print("="*70)
+                print(combined_prompt)
+                print("="*70 + "\n")
             else:
                 print(f"⚠️  No nodes configured. Using default prompt: {combined_prompt}")
             return True
-    except Exception as e:
+    except httpx.TimeoutException as e:
+        print(f"❌ TIMEOUT: Node.js service at {NODE_SERVICE_URL} did not respond")
         if retry_count < max_retries:
-            print(f"⚠️  Could not send nodes to Node.js service (attempt {retry_count + 1}/{max_retries})...")
+            print(f"   Retrying... (attempt {retry_count + 1}/{max_retries})")
             await asyncio.sleep(retry_delay)
             return await send_nodes_to_nodejs(nodes_with_ids, output_schema, combined_prompt, retry_count + 1)
         else:
-            print(f"⚠️  Could not send nodes to Node.js service after {max_retries} attempts")
-            print(f"   Node.js service may not be running. Nodes will be available via API.")
-            print(f"   Start Node.js service separately if needed.")
+            print(f"❌ Failed after {max_retries} attempts")
+            return False
+    except httpx.ConnectError as e:
+        print(f"❌ CONNECTION ERROR: Cannot reach Node.js service at {NODE_SERVICE_URL}")
+        print(f"   Error: {e}")
+        print(f"   ⚠️  Is the Node.js Overshoot service running?")
+        if retry_count < max_retries:
+            print(f"   Retrying... (attempt {retry_count + 1}/{max_retries})")
+            await asyncio.sleep(retry_delay)
+            return await send_nodes_to_nodejs(nodes_with_ids, output_schema, combined_prompt, retry_count + 1)
+        else:
+            print(f"❌ Failed after {max_retries} attempts")
+            return False
+    except Exception as e:
+        print(f"❌ ERROR sending to Node.js service: {type(e).__name__}: {e}")
+        if retry_count < max_retries:
+            print(f"   Retrying... (attempt {retry_count + 1}/{max_retries})")
+            await asyncio.sleep(retry_delay)
+            return await send_nodes_to_nodejs(nodes_with_ids, output_schema, combined_prompt, retry_count + 1)
+        else:
+            print(f"❌ Failed after {max_retries} attempts")
+            print(f"   ⚠️  Node.js service may not be running at {NODE_SERVICE_URL}")
+            print(f"   ⚠️  Check if overshoot_service is started")
             return False
 
 
@@ -363,7 +429,7 @@ async def root():
         "version": "1.0.0",
         "node_service_url": NODE_SERVICE_URL,
         "active_nodes": len(nodes_store),
-        "mongodb_connected": db is not None if db else False
+        "mongodb_connected": db is not None
     }
 
 
@@ -383,7 +449,7 @@ async def health_check():
         "status": "ok",
         "node_service_status": node_status,
         "results_count": len(results_store),
-        "mongodb_connected": db is not None if db else False
+        "mongodb_connected": db is not None
     }
 
 
@@ -443,26 +509,20 @@ async def receive_result(result: Result):
     if len(results_store) > 100:
         results_store.pop(0)
     
-    # Print result in a clear format (only if verbose logging is enabled)
-    # Commented out for performance - uncomment if you need detailed logging
-    # print("\n" + "="*60)
-    # print(f"📹 RESULT RECEIVED - {result_data['received_at']}")
-    # print(f"🔍 Prompt: {result.prompt}")
-    # if result.node_id:
-    #     print(f"🆔 Node ID: {result.node_id}")
-    # print(f"📝 Result ({'JSON' if is_json else 'Text'}):")
-    # print("-"*60)
-    # if is_json:
-    #     print(json.dumps(parsed_result, indent=2))
-    # else:
-    #     print(result.result)
-    # print("="*60 + "\n")
-    
-    # Quick log for performance
+    # Print result in a clear format
+    print("\n" + "="*70)
+    print(f"📹 OVERSHOOT RESULT RECEIVED - {result_data['received_at']}")
+    print("="*70)
+    print(f"🔍 Prompt Used: {result.prompt}")
+    if result.node_id:
+        print(f"🆔 Node ID: {result.node_id}")
+    print(f"\n📝 Result Type: {'JSON (Structured)' if is_json else 'Text (Unstructured)'}")
+    print("-"*70)
     if is_json:
-        print(f"📹 Result: {len(parsed_result)} fields")
+        print(json.dumps(parsed_result, indent=2))
     else:
-        print(f"📹 Result received")
+        print(result.result)
+    print("="*70 + "\n")
     
     return {"success": True, "message": "Result received"}
 
@@ -531,8 +591,13 @@ async def update_nodes(nodes_update: NodesUpdate):
 @app.get("/api/nodes")
 async def get_nodes():
     """Get current nodes configuration"""
+    print("\n" + "="*70)
+    print("📡 CAMERA REQUESTING NODES (Camera is starting)")
+    print("="*70)
+    
     # If nodes_store is empty, reload from file
     if not nodes_store:
+        print("⚠️  nodes_store is empty, loading from file...")
         nodes, output_schema, combined_prompt = load_nodes_from_file()
         nodes_with_ids = []
         for i, node in enumerate(nodes):
@@ -542,14 +607,24 @@ async def get_nodes():
             node_dict["name"] = node_dict.get("name") or node_dict["id"]
             nodes_with_ids.append(node_dict)
         nodes_store.extend(nodes_with_ids)
+    else:
+        print(f"✅ Using existing nodes_store with {len(nodes_store)} nodes")
     
     # Generate schema and prompt for response
     if nodes_store:
         output_schema = convert_nodes_to_output_schema([Node(**n) for n in nodes_store])
         combined_prompt = create_combined_prompt([Node(**n) for n in nodes_store])
+        
+        print(f"\n📋 NODES BEING SENT TO CAMERA:")
+        print(json.dumps(nodes_store, indent=2))
+        print(f"\n🎯 PROMPT BEING SENT TO CAMERA:")
+        print(combined_prompt)
+        print("="*70 + "\n")
     else:
         output_schema = {}
         combined_prompt = DEFAULT_PROMPT
+        print("⚠️  No nodes available, using default prompt")
+        print("="*70 + "\n")
     
     return {
         "nodes": nodes_store,
@@ -1377,6 +1452,60 @@ async def save_project_nodes(
             }
         }
     )
+    
+    # Process nodes and update global nodes_store so camera uses the saved nodes
+    print("\n" + "="*70)
+    print("💾 NODES SAVED - Processing and updating global nodes_store")
+    print("="*70)
+    print("\n📥 RECEIVED NODES DATA:")
+    print(json.dumps(nodes_data, indent=2))
+    
+    from nodes.node_processing import process_listeners
+    
+    try:
+        # Process the nodes using node_processing.py
+        processed_result = process_listeners(nodes_data)
+        processed_nodes = processed_result.get("nodes", [])
+        
+        print(f"\n📋 PROCESSED NODES ({len(processed_nodes)} nodes):")
+        print(json.dumps(processed_nodes, indent=2))
+        
+        # Update global nodes_store
+        nodes_store.clear()
+        nodes_store.extend(processed_nodes)
+        
+        print(f"\n✅ Updated global nodes_store with {len(processed_nodes)} nodes")
+        
+        # Generate the combined prompt and schema for logging
+        if processed_nodes:
+            # Convert processed nodes to Node objects for schema generation
+            node_objects = []
+            for node in processed_nodes:
+                node_objects.append(Node(
+                    id=node.get("name"),
+                    prompt=node.get("prompt"),
+                    datatype=NodeDataType(node.get("datatype", "boolean")),
+                    name=node.get("name")
+                ))
+            
+            output_schema = convert_nodes_to_output_schema(node_objects)
+            combined_prompt = create_combined_prompt(node_objects)
+            
+            print(f"\n🎯 COMBINED PROMPT:")
+            print(combined_prompt)
+            print("="*70 + "\n")
+            
+            # Send updated nodes to Node.js service
+            await send_nodes_to_nodejs(processed_nodes, output_schema, combined_prompt)
+        else:
+            print("⚠️  No nodes to process from saved project")
+            print("="*70 + "\n")
+            
+    except Exception as e:
+        print(f"\n❌ ERROR processing nodes: {e}")
+        import traceback
+        traceback.print_exc()
+        print("="*70 + "\n")
     
     return {
         "success": True,

@@ -28,35 +28,41 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
         listener_id = listener.get("listener_id", "")
         listener_data = listener.get("listener_data", {})
         
-        # Extract goal from listener
+        # Extract info from listener
         listener_type = listener_data.get("listener_type", "")
-        listener_description = listener_data.get("description", "")
+        listener_description = listener_data.get("description", "").strip()
         
-        goal = f"{listener_type} detection"
+        # Build a simple, natural language prompt
         if listener_description:
-            goal += f" - {listener_description}"
-        
-        # Extract constraints from conditions
-        constraints = []
-        for condition in listener.get("conditions", []):
-            cond_data = condition.get("condition_data", {})
-            cond_type = cond_data.get("condition_type", "")
-            cond_description = cond_data.get("description", "")
-            
-            constraint_parts = []
-            if cond_type:
-                constraint_parts.append(cond_type)
-            if cond_description is not None:
-                constraint_parts.append(f"description: {cond_description}")
-            
-            if constraint_parts:
-                constraints.append(" - ".join(constraint_parts))
-        
-        # Build the prompt string
-        if constraints:
-            prompt = f"Goal: {goal}, Constraints: {'; '.join(constraints)}"
+            # Use the description if provided
+            prompt = listener_description
         else:
-            prompt = f"Goal: {goal}, Constraints: none"
+            # Generate a simple prompt based on type
+            if "person" in listener_type.lower():
+                prompt = "Is there a person?"
+            elif "motion" in listener_type.lower():
+                prompt = "Is there motion?"
+            elif "face" in listener_type.lower():
+                prompt = "Is there a face?"
+            elif "license" in listener_type.lower():
+                prompt = "Is there a license plate?"
+            elif "object" in listener_type.lower():
+                prompt = "Detect any objects"
+            else:
+                prompt = f"Detect {listener_type}"
+        
+        # Add condition context if present (simplified)
+        conditions = listener.get("conditions", [])
+        if conditions:
+            cond_texts = []
+            for condition in conditions:
+                cond_data = condition.get("condition_data", {})
+                cond_desc = cond_data.get("description", "").strip()
+                if cond_desc:
+                    cond_texts.append(cond_desc)
+            
+            if cond_texts:
+                prompt += f" ({', '.join(cond_texts)})"
         
         nodes.append({
             "name": listener_id,
