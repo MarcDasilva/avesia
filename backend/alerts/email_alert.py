@@ -1,22 +1,12 @@
 """
 Email Alert Automation Script
 Sends email alerts with configurable recipient, subject, and message.
-
-Usage: python email_alert.py <recipient_email> <subject> <message>
-
-Example:
-  python email_alert.py "user@example.com" "Alert" "This is an alert message"
-
-Or use as a module:
-  from email_alert import send_email
-  send_email("user@example.com", "Alert", "Message")
+Simple script that just sends emails - no history tracking.
 """
 import os
-import json
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -29,26 +19,6 @@ SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
 SENDER_EMAIL = os.getenv('SENDER_EMAIL', '')
 SENDER_PASSWORD = os.getenv('SENDER_PASSWORD', '')
-
-# Temp JSON file path
-TEMP_JSON_FILE = Path(__file__).parent / 'email_alerts_temp.json'
-
-
-def load_email_history():
-    """Load email history from temp JSON file"""
-    if TEMP_JSON_FILE.exists():
-        try:
-            with open(TEMP_JSON_FILE, 'r') as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            return {"emails": []}
-    return {"emails": []}
-
-
-def save_email_history(history):
-    """Save email history to temp JSON file"""
-    with open(TEMP_JSON_FILE, 'w') as f:
-        json.dump(history, f, indent=2)
 
 
 def send_email(recipient_email, subject, message):
@@ -96,28 +66,10 @@ def send_email(recipient_email, subject, message):
         server.sendmail(SENDER_EMAIL, recipient_email, text)
         server.quit()
         
-        # Save to history
-        history = load_email_history()
-        email_record = {
-            "timestamp": datetime.now().isoformat(),
-            "recipient": recipient_email,
-            "subject": subject,
-            "message": message,
-            "status": "sent"
-        }
-        history["emails"].append(email_record)
-        
-        # Keep only last 100 emails
-        if len(history["emails"]) > 100:
-            history["emails"] = history["emails"][-100:]
-        
-        save_email_history(history)
-        
         print(f"✅ Email sent successfully to {recipient_email}")
         return {
             "success": True,
-            "message": f"Email sent successfully to {recipient_email}",
-            "timestamp": email_record["timestamp"]
+            "message": f"Email sent successfully to {recipient_email}"
         }
         
     except smtplib.SMTPAuthenticationError:
@@ -134,13 +86,6 @@ def send_email(recipient_email, subject, message):
         error_msg = f"Unexpected error: {str(e)}"
         print(f"❌ {error_msg}")
         return {"success": False, "error": error_msg}
-
-
-def get_email_history(limit=10):
-    """Get recent email history"""
-    history = load_email_history()
-    emails = history.get("emails", [])
-    return emails[-limit:] if limit else emails
 
 
 def main():
@@ -172,4 +117,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

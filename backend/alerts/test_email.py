@@ -63,7 +63,6 @@ def main():
     
     if result["success"]:
         print(f"\n✅ {result['message']}")
-        print(f"   Timestamp: {result.get('timestamp', 'N/A')}")
     else:
         print(f"\n❌ Error: {result['error']}")
         print("\n💡 Make sure you have set SENDER_EMAIL and SENDER_PASSWORD in backend/.env")
