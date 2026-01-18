@@ -250,6 +250,25 @@ export const projectsAPI = {
 
     return await response.json();
   },
+
+  // Activate a project's nodes (loads them into global nodes_store for camera)
+  async activateNodes(projectId) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/nodes/activate`,
+      {
+        method: "POST",
+        headers,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to activate nodes");
+    }
+
+    return await response.json();
+  },
 };
 
 // Overshoot SDK API

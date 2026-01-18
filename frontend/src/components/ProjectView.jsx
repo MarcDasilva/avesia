@@ -736,6 +736,15 @@ export function ProjectView({ project, onBack }) {
             0
           );
           setNodeId(maxId + 1);
+
+          // Activate project nodes in backend so camera uses them
+          try {
+            await projectsAPI.activateNodes(project.id);
+            console.log("✅ Project nodes activated for camera");
+          } catch (error) {
+            console.error("⚠️ Failed to activate project nodes:", error);
+            // Don't block UI if activation fails
+          }
         }
       } catch (error) {
         console.error("Error loading nodes:", error);
