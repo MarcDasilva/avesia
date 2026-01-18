@@ -1,8 +1,21 @@
-import React, { useState, useCallback, useRef } from "react";
-import { IconChevronLeft, IconPlus } from "@tabler/icons-react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import {
+  IconChevronLeft,
+  IconPlus,
+  IconVideo,
+  IconFile,
+} from "@tabler/icons-react";
 import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
 import "./MagicBento.css";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 import {
   ReactFlow,
   Background,
@@ -48,6 +61,13 @@ export function ProjectView({ project, onBack }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [nodeId, setNodeId] = useState(2);
   const reactFlowWrapper = useRef(null);
+
+  // Video and dialog state
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [videos, setVideos] = useState([]); // Array of video sources (file URLs or camera streams)
+  const [webcamStream, setWebcamStream] = useState(null);
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const fileInputRef = useRef(null);
 
   const onConnect = useCallback(
     (params) => {
@@ -120,6 +140,75 @@ export function ProjectView({ project, onBack }) {
     event.dataTransfer.effectAllowed = "move";
   };
 
+  // Handle file upload
+  const handleFileUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Check if it's a video file (mp4, webm, etc.)
+    if (file.type.startsWith("video/")) {
+      const videoUrl = URL.createObjectURL(file);
+      setVideos((prev) => [
+        ...prev,
+        { type: "file", url: videoUrl, name: file.name },
+      ]);
+
+      // TODO: Upload file to backend/database
+      // const formData = new FormData();
+      // formData.append("video", file);
+      // formData.append("projectId", project.id);
+      // await uploadVideoToBackend(formData);
+
+      setIsDialogOpen(false);
+    } else {
+      alert("Please select a video file (mp4, webm, etc.)");
+    }
+  };
+
+  // Handle webcam activation
+  const handleWebcamStart = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      setWebcamStream(stream);
+      setIsWebcamActive(true);
+      setIsDialogOpen(false);
+
+      // Add webcam to videos list
+      setVideos((prev) => [...prev, { type: "webcam", stream: stream }]);
+    } catch (error) {
+      console.error("Error accessing webcam:", error);
+      alert("Unable to access webcam. Please ensure permissions are granted.");
+    }
+  };
+
+  // Handle webcam stop
+  const stopWebcam = () => {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach((track) => track.stop());
+      setWebcamStream(null);
+      setIsWebcamActive(false);
+      setVideos((prev) => prev.filter((v) => v.type !== "webcam"));
+    }
+  };
+
+  // Cleanup webcam on unmount
+  useEffect(() => {
+    return () => {
+      if (webcamStream) {
+        webcamStream.getTracks().forEach((track) => track.stop());
+      }
+      // Clean up file URLs
+      videos.forEach((video) => {
+        if (video.type === "file" && video.url) {
+          URL.revokeObjectURL(video.url);
+        }
+      });
+    };
+  }, []);
+
   return (
     <div className="flex flex-col h-full w-full">
       {/* Header with back button */}
@@ -145,40 +234,84 @@ export function ProjectView({ project, onBack }) {
           className="w-full border-b border-gray-700"
           style={{ height: "50%", overflow: "auto" }}
         >
-          <div className="p-4 h-full flex items-center justify-center">
-            <ParticleCard
-              className="magic-bento-card magic-bento-card--border-glow"
-              style={{
-                backgroundColor: "#060010",
-                "--glow-color": "255, 255, 255",
-                cursor: "pointer",
-                width: "400px",
-                maxWidth: "100%",
-              }}
-              clickEffect={true}
-              enableMagnetism={true}
-            >
-              <div
-                onClick={() => {
-                  // Handle click - add functionality here
-                  console.log("Plus button clicked");
-                }}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "0.5rem",
-                }}
-              >
-                <IconPlus className="text-white" size={32} />
-                <span className="text-white text-sm text-center px-2">
-                  Add Pre-Recorded or Live Footage
-                </span>
+          <div className="p-4 h-full">
+            {/* Display videos if any */}
+            {videos.length > 0 ? (
+              <div className="grid grid-cols-2 gap-4 h-full">
+                {videos.map((video, index) => (
+                  <div
+                    key={index}
+                    className="relative bg-black rounded overflow-hidden"
+                  >
+                    {video.type === "file" ? (
+                      <video
+                        src={video.url}
+                        controls
+                        className="w-full h-full object-contain"
+                        style={{ maxHeight: "100%" }}
+                      >
+                        Your browser does not support the video tag.
+                      </video>
+                    ) : video.type === "webcam" && video.stream ? (
+                      <video
+                        ref={(el) => {
+                          if (el && video.stream) {
+                            el.srcObject = video.stream;
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        className="w-full h-full object-contain"
+                        style={{ maxHeight: "100%" }}
+                      >
+                        Your browser does not support the video tag.
+                      </video>
+                    ) : null}
+                    {video.type === "webcam" && (
+                      <button
+                        onClick={stopWebcam}
+                        className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                      >
+                        Stop Camera
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
-            </ParticleCard>
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <ParticleCard
+                  className="magic-bento-card magic-bento-card--border-glow"
+                  style={{
+                    backgroundColor: "#060010",
+                    "--glow-color": "255, 255, 255",
+                    cursor: "pointer",
+                    width: "400px",
+                    maxWidth: "100%",
+                  }}
+                  clickEffect={true}
+                  enableMagnetism={true}
+                >
+                  <div
+                    onClick={() => setIsDialogOpen(true)}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <IconPlus className="text-white" size={32} />
+                    <span className="text-white text-sm text-center px-2">
+                      Add Pre-Recorded or Live Footage
+                    </span>
+                  </div>
+                </ParticleCard>
+              </div>
+            )}
           </div>
         </div>
 
@@ -236,6 +369,58 @@ export function ProjectView({ project, onBack }) {
           </div>
         </div>
       </div>
+
+      {/* Dialog for choosing video source */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Video Source</DialogTitle>
+            <DialogDescription>
+              Choose how you want to add video footage
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4 py-4">
+            <Button
+              variant="outline"
+              onClick={handleWebcamStart}
+              className="flex items-center gap-2 justify-start h-auto py-4"
+            >
+              <IconVideo className="h-5 w-5" />
+              <div className="flex flex-col items-start">
+                <span className="font-semibold">Web Camera</span>
+                <span className="text-xs text-muted-foreground">
+                  Use your live camera feed
+                </span>
+              </div>
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 justify-start h-auto py-4"
+            >
+              <IconFile className="h-5 w-5" />
+              <div className="flex flex-col items-start">
+                <span className="font-semibold">File Upload</span>
+                <span className="text-xs text-muted-foreground">
+                  Upload an MP4 video file
+                </span>
+              </div>
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/*"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
