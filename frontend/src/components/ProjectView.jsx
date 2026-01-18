@@ -154,7 +154,7 @@ export function ProjectView({ project, onBack }) {
     );
   }, []);
 
-  // Handle event config change (for Gmail, Text, Emergency)
+  // Handle event config change (for Email, Text, Emergency)
   const handleEventConfigChange = useCallback((nodeId, config) => {
     setNodes((nds) =>
       nds.map((node) => {
@@ -789,14 +789,13 @@ export function ProjectView({ project, onBack }) {
           >
             <IconChevronLeft className="h-4 w-4" />
           </Button>
-          <h1 className="text-2xl font-semibold text-white">{project.name}</h1>
+          <h1
+            className="text-2xl font-semibold text-white"
+            style={{ fontFamily: "Zalando Sans Expanded, sans-serif" }}
+          >
+            {project.name}
+          </h1>
         </div>
-        <Button
-          onClick={handleSaveNodes}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
-        >
-          Save Nodes
-        </Button>
       </div>
 
       {/* Two horizontal rectangles - each taking half the screen */}
@@ -1030,9 +1029,16 @@ export function ProjectView({ project, onBack }) {
             {/* React Flow canvas */}
             <div
               ref={reactFlowWrapper}
-              className="w-full h-full bg-gray-950"
+              className="w-full h-full bg-gray-950 relative"
               style={{ height: "100%" }}
             >
+              {/* Save Nodes button - positioned top right */}
+              <Button
+                onClick={handleSaveNodes}
+                className="absolute top-4 right-4 z-10 rounded-none bg-black border-2 border-white text-white hover:bg-gray-900"
+              >
+                Save Nodes
+              </Button>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}

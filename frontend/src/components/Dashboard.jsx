@@ -104,6 +104,17 @@ export function Dashboard() {
     // Navigation is handled by ProjectsGrid using useNavigate
   };
 
+  const handleProjectsRefresh = async () => {
+    if (!user) return;
+    
+    try {
+      const fetchedProjects = await projectsAPI.getAll();
+      setProjects(fetchedProjects);
+    } catch (err) {
+      console.error('Error refreshing projects:', err);
+    }
+  };
+
   return (
     <div className="dark" style={{ position: "relative", width: "100%", height: "100vh" }}>
       {/* Black screen overlay for fade-in */}
@@ -145,6 +156,7 @@ export function Dashboard() {
                     onCreateProject={handleCreateProject}
                     onSelectProject={handleSelectProject}
                     onDeleteProject={handleDeleteProject}
+                    onProjectsRefresh={handleProjectsRefresh}
                   />
                 }
               />
