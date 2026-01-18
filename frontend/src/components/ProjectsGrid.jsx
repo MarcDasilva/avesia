@@ -187,6 +187,36 @@ export function ProjectsGrid({
               >
                 <h2 className="magic-bento-card__title">{project.name}</h2>
                 <p className="magic-bento-card__description">Click to open</p>
+                {project.name !== "Live" &&
+                  project.name !== "Test" &&
+                  project.name !== "New" && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        marginTop: "4px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          backgroundColor: "#22c55e",
+                          animation: "pulse 2s ease-in-out infinite",
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#22c55e",
+                        }}
+                      >
+                        running
+                      </span>
+                    </div>
+                  )}
               </div>
 
               {/* Thumbnail upload button */}

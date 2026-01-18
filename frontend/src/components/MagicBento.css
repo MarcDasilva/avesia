@@ -273,3 +273,12 @@
 .video-container:hover .video-hover-controls::-webkit-media-controls {
   opacity: 1;
 }
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
