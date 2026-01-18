@@ -224,6 +224,11 @@ export function ProjectView({ project, onBack }) {
 
         setVideos(loadedVideos);
         setIsDialogOpen(false);
+
+        // Reset file input so it can be clicked again
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       } catch (error) {
         console.error("Error uploading video:", error);
         alert(`Failed to upload video: ${error.message}`);
@@ -311,7 +316,8 @@ export function ProjectView({ project, onBack }) {
         }
 
         // Convert backend video data to frontend format with blob URLs
-        const loadedVideos = await Promise.all(
+        // Filter out videos that can't be loaded (e.g., missing files)
+        const loadedVideosResults = await Promise.allSettled(
           projectVideos.map(async (video) => {
             try {
               console.log(`Loading video: ${video.id} - ${video.filename}`);
@@ -355,6 +361,14 @@ export function ProjectView({ project, onBack }) {
                 console.error(`Error creating fallback URL:`, fallbackError);
               }
 
+              // If video file doesn't exist (404), throw error to filter it out
+              if (
+                error.message?.includes("Not Found") ||
+                error.message?.includes("404")
+              ) {
+                throw new Error(`Video file not found: ${video.filename}`);
+              }
+
               // Last resort: regular URL (may fail due to auth, but worth trying)
               return {
                 type: "file",
@@ -365,6 +379,11 @@ export function ProjectView({ project, onBack }) {
             }
           })
         );
+
+        // Filter out failed video loads (e.g., missing files) and keep only successful ones
+        const loadedVideos = loadedVideosResults
+          .filter((result) => result.status === "fulfilled")
+          .map((result) => result.value);
 
         console.log("Loaded videos:", loadedVideos);
         setVideos(loadedVideos);
@@ -452,102 +471,133 @@ export function ProjectView({ project, onBack }) {
                 <div className="text-white">Loading videos...</div>
               </div>
             ) : videos.length > 0 ? (
-              <div className="flex flex-wrap justify-center items-center gap-6 h-full p-4">
+              <div
+                className={`flex ${
+                  videos.length === 1 ? "justify-center" : "justify-start"
+                } items-center gap-4 h-full p-4 overflow-x-auto`}
+              >
                 {videos.map((video, index) => (
                   <div
                     key={index}
-                    className="relative bg-gray-900 rounded-lg overflow-hidden border-2 border-gray-600 shadow-lg video-container"
-                    style={{
-                      maxWidth: "600px",
-                      width: "100%",
-                      aspectRatio: "16/9",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                    onMouseEnter={() => setHoveredVideoIndex(index)}
-                    onMouseLeave={() => setHoveredVideoIndex(null)}
+                    className={`flex items-center gap-3 ${
+                      videos.length > 1 ? "flex-1" : ""
+                    }`}
+                    style={
+                      videos.length > 1 ? { maxWidth: "calc(50% - 8px)" } : {}
+                    }
                   >
-                    {video.type === "file" ? (
-                      <video
-                        ref={(el) => {
-                          videoRefs.current[`video-${index}`] = el;
-                          if (el) {
-                            // Ensure video plays when element is mounted
-                            const playVideo = async () => {
-                              await playVideoWithFallback(el);
-                            };
-
-                            // If video is already loaded, play immediately
-                            if (el.readyState >= 2) {
-                              playVideo();
-                            } else {
-                              // Otherwise, wait for video to load
-                              const handleCanPlay = () => {
-                                playVideo();
-                                el.removeEventListener(
-                                  "canplay",
-                                  handleCanPlay
-                                );
-                              };
-                              el.addEventListener("canplay", handleCanPlay);
-                            }
-                          }
-                        }}
-                        src={video.url}
-                        controls={hoveredVideoIndex === index}
-                        autoPlay
-                        playsInline
-                        className="w-full h-full object-contain"
-                      >
-                        Your browser does not support the video tag.
-                      </video>
-                    ) : video.type === "overshoot" ? (
-                      <div
-                        className="w-full h-full relative bg-black"
-                        style={{ minHeight: "300px" }}
-                      >
+                    <div
+                      className="relative bg-gray-900 rounded-lg overflow-hidden border-2 border-gray-600 shadow-lg video-container"
+                      style={{
+                        width: "100%",
+                        aspectRatio: "16/9",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      onMouseEnter={() => setHoveredVideoIndex(index)}
+                      onMouseLeave={() => setHoveredVideoIndex(null)}
+                    >
+                      {video.type === "file" ? (
                         <video
-                          ref={overshootVideoRef}
+                          ref={(el) => {
+                            videoRefs.current[`video-${index}`] = el;
+                            if (el) {
+                              // Ensure video plays when element is mounted
+                              const playVideo = async () => {
+                                await playVideoWithFallback(el);
+                              };
+
+                              // If video is already loaded, play immediately
+                              if (el.readyState >= 2) {
+                                playVideo();
+                              } else {
+                                // Otherwise, wait for video to load
+                                const handleCanPlay = () => {
+                                  playVideo();
+                                  el.removeEventListener(
+                                    "canplay",
+                                    handleCanPlay
+                                  );
+                                };
+                                el.addEventListener("canplay", handleCanPlay);
+                              }
+                            }
+                          }}
+                          src={video.url}
+                          controls={hoveredVideoIndex === index}
                           autoPlay
                           playsInline
-                          muted
                           className="w-full h-full object-contain"
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            minHeight: "300px",
-                            backgroundColor: "#000",
-                            display: "block",
-                          }}
                         >
                           Your browser does not support the video tag.
                         </video>
-                        {overshootError && (
-                          <div className="absolute top-2 left-2 bg-red-600 text-white px-3 py-1 rounded text-sm">
-                            {overshootError}
-                          </div>
-                        )}
-                        {isOvershootConnecting && (
-                          <div className="absolute top-2 left-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
-                            Connecting...
-                          </div>
-                        )}
-                        {isOvershootActive && (
-                          <div className="absolute top-2 left-2 bg-green-600 text-white px-3 py-1 rounded text-sm">
-                            Processing
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
-                    {video.type === "overshoot" && (
-                      <button
-                        onClick={stopWebcam}
-                        className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
-                        disabled={isOvershootConnecting}
+                      ) : video.type === "overshoot" ? (
+                        <div
+                          className="w-full h-full relative bg-black"
+                          style={{ minHeight: "300px" }}
+                        >
+                          <video
+                            ref={overshootVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full h-full object-contain"
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              minHeight: "300px",
+                              backgroundColor: "#000",
+                              display: "block",
+                            }}
+                          >
+                            Your browser does not support the video tag.
+                          </video>
+                          {overshootError && (
+                            <div className="absolute top-2 left-2 bg-red-600 text-white px-3 py-1 rounded text-sm">
+                              {overshootError}
+                            </div>
+                          )}
+                          {isOvershootConnecting && (
+                            <div className="absolute top-2 left-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
+                              Connecting...
+                            </div>
+                          )}
+                          {isOvershootActive && (
+                            <div className="absolute top-2 left-2 bg-green-600 text-white px-3 py-1 rounded text-sm">
+                              Processing
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                      {video.type === "overshoot" && (
+                        <button
+                          onClick={stopWebcam}
+                          className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                          disabled={isOvershootConnecting}
+                        >
+                          {isOvershootConnecting
+                            ? "Stopping..."
+                            : "Stop Camera"}
+                        </button>
+                      )}
+                    </div>
+                    {/* Plus button to add another video - only show if less than 2 videos */}
+                    {videos.length < 2 && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log("Plus button clicked, opening dialog");
+                          setIsDialogOpen(true);
+                        }}
+                        className="h-12 w-12 rounded-full bg-gray-800 border-2 border-gray-600 hover:bg-gray-700 hover:border-gray-500 text-white shrink-0"
+                        title="Add another video"
                       >
-                        {isOvershootConnecting ? "Stopping..." : "Stop Camera"}
-                      </button>
+                        <IconPlus className="h-6 w-6" />
+                      </Button>
                     )}
                   </div>
                 ))}
