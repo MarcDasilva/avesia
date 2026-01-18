@@ -192,6 +192,26 @@ export const projectsAPI = {
     const blob = await response.blob();
     return URL.createObjectURL(blob);
   },
+
+  // Save nodes configuration for a project
+  async saveNodes(projectId, nodesData) {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/nodes`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(nodesData),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to save nodes");
+    }
+
+    return await response.json();
+  },
 };
 
 // Overshoot SDK API
