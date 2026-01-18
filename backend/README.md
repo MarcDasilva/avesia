@@ -6,7 +6,7 @@ Backend server for Avesia project management platform using FastAPI, MongoDB, an
 
 This backend consists of two services that work together:
 
-1. **Python FastAPI Backend** (`app.py` / `main.py`) - Receives results, manages node configurations, controls the Node.js service, and provides project management API
+1. **Python FastAPI Backend** (`main.py`) - Receives results, manages node configurations, controls the Node.js service, and provides project management API
 2. **Node.js Overshoot Service** (`overshoot_service/`) - Serves the browser interface that processes live video using Overshoot SDK
 
 ## Communication Flow
@@ -87,7 +87,7 @@ FRONTEND_URL=http://localhost:5173
 
 # Overshoot SDK Configuration
 OVERSHOOT_API_KEY=your-api-key-here
-PYTHON_BACKEND_URL=http://localhost:8000
+PYTHON_BACKEND_URL=http://localhost:3001
 NODE_SERVICE_PORT=3001
 NODE_SERVICE_URL=http://localhost:3001
 
@@ -155,7 +155,7 @@ cd backend
 python main.py
 ```
 
-Python backend runs on `http://localhost:3001` by default (or `http://localhost:8000` for the Overshoot service backend if using `app.py`).
+Python backend runs on `http://localhost:3001` by default (configurable via `PORT` environment variable).
 
 **Note:** Start Node.js first, then Python. Python will automatically load nodes from `sample_nodes.json` and send them to Node.js.
 
@@ -185,9 +185,11 @@ FastAPI automatically generates interactive API documentation:
 - `GET /api/nodes` - Get current nodes configuration
 - `POST /api/nodes` - Update nodes configuration
 - `POST /api/nodes/reload` - Reload nodes from `sample_nodes.json`
+- `DELETE /api/nodes` - Clear all nodes configuration
 - `POST /api/prompt` - Send prompt update to Node.js service
 - `POST /api/control` - Control Node.js service (start/stop)
-- `GET /health` - Health check
+- `GET /health` - Health check (checks Node.js service status)
+- `GET /api/health` - Health check (checks MongoDB status)
 
 #### Node.js Service (Express)
 
@@ -218,25 +220,25 @@ The API expects the user ID in the `X-User-Id` header for project management end
 ### Get Current Nodes
 
 ```bash
-curl http://localhost:8000/api/nodes
+curl http://localhost:3001/api/nodes
 ```
 
 ### Reload Nodes from File
 
 ```bash
-curl -X POST http://localhost:8000/api/nodes/reload
+curl -X POST http://localhost:3001/api/nodes/reload
 ```
 
 ### Get Recent Results
 
 ```bash
-curl http://localhost:8000/api/results
+curl http://localhost:3001/api/results
 ```
 
 ### Update Nodes Programmatically
 
 ```bash
-curl -X POST http://localhost:8000/api/nodes \
+curl -X POST http://localhost:3001/api/nodes \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
@@ -342,7 +344,7 @@ See `ATLAS_SETUP.md` and `SETUP_ENV.md` for more detailed setup instructions.
 - Check VPN connection (required for Overshoot API)
 
 ### No Results Appearing
-- Verify nodes are loaded: `curl http://localhost:8000/api/nodes`
+- Verify nodes are loaded: `curl http://localhost:3001/api/nodes`
 - Check browser console for SDK errors
 - Verify camera feed is visible on the page
 - Check Python terminal for received results
