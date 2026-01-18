@@ -2,8 +2,9 @@
 Avesia Backend API - Unified FastAPI Application
 Combines Overshoot SDK/Node system and MongoDB/Projects API
 """
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Form, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Dict, Any
 from enum import Enum
@@ -12,6 +13,9 @@ import httpx
 import json
 import os
 import asyncio
+import shutil
+import uuid
+from pathlib import Path
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
@@ -37,6 +41,12 @@ app.add_middleware(
 # ============================================================================
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "avesia")
+
+# ============================================================================
+# Video Upload Configuration
+# ============================================================================
+UPLOADS_DIR = Path("uploads")
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 # MongoDB connection
 try:
@@ -140,6 +150,7 @@ class Project(BaseModel):
     id: str
     userId: str
     name: str
+    videos: List[Dict[str, Any]] = Field(default_factory=list)
     createdAt: datetime
     updatedAt: datetime
 
@@ -704,6 +715,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
     project = {
         "userId": userId,
         "name": project_data.name.strip(),
+        "videos": [],  # Initialize videos array
         "createdAt": now,
         "updatedAt": now,
     }
@@ -715,6 +727,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
         "id": str(project["_id"]),
         "userId": project["userId"],
         "name": project["name"],
+        "videos": project.get("videos", []),
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -738,10 +751,17 @@ async def get_project(project_id: str, userId: str = Header(None, alias="X-User-
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
+    videos = project.get("videos", [])
+    # Debug logging
+    print(f"DEBUG: Project {project_id} has {len(videos)} videos")
+    print(f"DEBUG: Videos field exists: {'videos' in project}")
+    print(f"DEBUG: Videos value: {videos}")
+    
     return {
         "id": str(project["_id"]),
         "userId": project["userId"],
         "name": project["name"],
+        "videos": videos,
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -783,6 +803,7 @@ async def update_project(project_id: str, project_data: ProjectUpdate, userId: s
         "id": str(result["_id"]),
         "userId": result["userId"],
         "name": result["name"],
+        "videos": result.get("videos", []),
         "createdAt": result["createdAt"],
         "updatedAt": result["updatedAt"],
     }
@@ -812,6 +833,131 @@ async def delete_project(project_id: str, userId: str = Header(None, alias="X-Us
         raise HTTPException(status_code=404, detail="Project not found")
     
     return {"message": "Project deleted successfully"}
+
+
+@app.post("/api/projects/{project_id}/videos")
+async def upload_video(
+    project_id: str,
+    file: UploadFile = File(...),
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Upload a video file for a project"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    # Validate file is a video
+    if not file.content_type or not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="File must be a video")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Generate unique filename
+    file_extension = Path(file.filename).suffix
+    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    file_path = UPLOADS_DIR / unique_filename
+    
+    # Save file to disk
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+    
+    # Create video metadata
+    video_data = {
+        "id": str(uuid.uuid4()),
+        "filename": file.filename,
+        "filepath": str(file_path),
+        "contentType": file.content_type,
+        "uploadedAt": datetime.utcnow(),
+    }
+    
+    # Add video to project
+    db.projects.update_one(
+        {"_id": object_id, "userId": userId},
+        {
+            "$push": {"videos": video_data},
+            "$set": {"updatedAt": datetime.utcnow()}
+        }
+    )
+    
+    # Refetch the project to ensure we have the latest data with the new video
+    updated_project = db.projects.find_one({"_id": object_id, "userId": userId})
+    
+    return {
+        "success": True,
+        "video": video_data,
+        "message": "Video uploaded successfully",
+        "videos_count": len(updated_project.get("videos", [])) if updated_project else 0
+    }
+
+
+@app.get("/api/projects/{project_id}/videos/{video_id}/file")
+async def get_video_file(
+    project_id: str,
+    video_id: str,
+    request: Request,
+    userId: Optional[str] = Header(None, alias="X-User-Id"),
+    userId_query: Optional[str] = Query(None, alias="userId")
+):
+    """Serve a video file for a project"""
+    # Accept userId from either header or query parameter
+    userId = userId or userId_query
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Find video in project
+    videos = project.get("videos", [])
+    video = next((v for v in videos if v.get("id") == video_id), None)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    file_path = Path(video["filepath"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found on server")
+    
+    # Create FileResponse with CORS headers
+    response = FileResponse(
+        str(file_path),
+        media_type=video.get("contentType", "video/mp4"),
+        filename=video.get("filename", "video.mp4")
+    )
+    
+    # Explicitly set CORS headers to ensure they're present
+    # This helps with fetch() requests from the frontend
+    # Get origin from request, or use configured frontend_url
+    origin = request.headers.get("origin") or frontend_url
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
 
 
 # ============================================================================

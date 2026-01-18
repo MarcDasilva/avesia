@@ -8,3 +8,5 @@ __pycache__/
 node_data/
 all_nodes_export.json
 processed_nodes_output.json
+/testing
+/uploads

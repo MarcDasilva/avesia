@@ -6,25 +6,9 @@
       "name": "has_person"
     },
     {
-      "prompt": "Count the number of cans visible in the frame",
-      "datatype": "integer",
-      "name": "can_count"
-    },
-    {
-      "prompt": "Are there any red objects visible?",
+      "prompt": "Is the baby still on the bed?",
       "datatype": "boolean",
-      "name": "has_red_objects"
-    },
-    {
-      "prompt": "How many people are in the frame?",
-      "datatype": "integer",
-      "name": "people_count"
-    },
-    {
-      "prompt": "Describe if anyone looks like they are in distress and how to help them.",
-      "datatype": "string",
-      "name": "threat_description"
+      "name": "on_bed"
     }
   ]
 }
-

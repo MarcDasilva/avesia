@@ -125,6 +125,73 @@ export const projectsAPI = {
 
     return true;
   },
+
+  // Upload a video file to a project
+  async uploadVideo(projectId, file) {
+    const { supabase } = await import("./supabase.js");
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized: User ID required");
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/videos`,
+      {
+        method: "POST",
+        headers: {
+          "X-User-Id": session.user.id,
+        },
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to upload video");
+    }
+
+    return await response.json();
+  },
+
+  // Get video file URL
+  getVideoUrl(projectId, videoId) {
+    return `${API_BASE_URL}/projects/${projectId}/videos/${videoId}/file`;
+  },
+
+  // Get video file as blob URL (with authentication)
+  async getVideoBlobUrl(projectId, videoId) {
+    const { supabase } = await import("./supabase.js");
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.user?.id) {
+      throw new Error("Unauthorized: User ID required");
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/projects/${projectId}/videos/${videoId}/file`,
+      {
+        method: "GET",
+        headers: {
+          "X-User-Id": session.user.id,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch video: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  },
 };
 
 // Overshoot SDK API
@@ -200,7 +267,9 @@ export const overshootAPI = {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch Overshoot config: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch Overshoot config: ${response.statusText}`
+      );
     }
 
     return await response.json();

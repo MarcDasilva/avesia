@@ -159,3 +159,53 @@
   fill: #ffffff !important;
   stroke: #ffffff !important;
 }
+
+/* Video controls hide/show on hover - global styles */
+.video-container video::-webkit-media-controls-enclosure {
+  opacity: 0;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-container:hover video::-webkit-media-controls-enclosure {
+  opacity: 1 !important;
+}
+
+/* Hide/show all webkit media controls */
+.video-container video::-webkit-media-controls {
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-container:hover video::-webkit-media-controls {
+  opacity: 1 !important;
+}
+
+/* Target the entire controls panel */
+.video-container video::-webkit-media-controls-panel {
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-container:hover video::-webkit-media-controls-panel {
+  opacity: 1 !important;
+}
+
+/* Ensure play button shows on hover */
+.video-container video::-webkit-media-controls-play-button {
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-container:hover video::-webkit-media-controls-play-button {
+  opacity: 1 !important;
+}
+
+/* Hide controls overlay when not hovering */
+.video-container video::-webkit-media-controls-overlay-enclosure {
+  opacity: 0 !important;
+  transition: opacity 0.3s ease !important;
+}
+
+.video-container:hover video::-webkit-media-controls-overlay-enclosure {
+  opacity: 1 !important;
+}

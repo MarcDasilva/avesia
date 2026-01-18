@@ -9,6 +9,7 @@ import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
 import "./MagicBento.css";
 import { useOvershootVision } from "../hooks/useOvershootVision";
+import { useOvershootVideoFile } from "../hooks/useOvershootVideoFile";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ import {
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { projectsAPI } from "../lib/api";
 
 // Custom node component
 const CustomNode = ({ data, selected }) => {
@@ -66,9 +68,14 @@ export function ProjectView({ project, onBack }) {
   // Video and dialog state
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [videos, setVideos] = useState([]); // Array of video sources (file URLs or camera streams)
+  const [webcamStream, setWebcamStream] = useState(null);
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const [hoveredVideoIndex, setHoveredVideoIndex] = useState(null);
+  const [isLoadingVideos, setIsLoadingVideos] = useState(true);
   const fileInputRef = useRef(null);
+  const videoRefs = useRef({}); // Refs for video elements to control playback
 
-  // Overshoot SDK integration
+  // Overshoot SDK integration for camera
   const {
     isActive: isOvershootActive,
     isConnecting: isOvershootConnecting,
@@ -86,6 +93,15 @@ export function ProjectView({ project, onBack }) {
       console.error("Overshoot error in ProjectView:", error);
     },
   });
+
+  // Overshoot SDK integration for video files
+  const {
+    isProcessing: isProcessingVideos,
+    error: videoProcessingError,
+    processVideoFile,
+    stopAll: stopAllVideoProcessing,
+    cleanup: cleanupVideoProcessing,
+  } = useOvershootVideoFile();
 
   const onConnect = useCallback(
     (params) => {
@@ -159,25 +175,87 @@ export function ProjectView({ project, onBack }) {
   };
 
   // Handle file upload
-  const handleFileUpload = (event) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     // Check if it's a video file (mp4, webm, etc.)
     if (file.type.startsWith("video/")) {
-      const videoUrl = URL.createObjectURL(file);
-      setVideos((prev) => [
-        ...prev,
-        { type: "file", url: videoUrl, name: file.name },
-      ]);
+      try {
+        console.log("Uploading video:", file.name, file.type);
+        // Upload to backend
+        const uploadResult = await projectsAPI.uploadVideo(project.id, file);
+        console.log("Upload result:", uploadResult);
 
-      // TODO: Upload file to backend/database
-      // const formData = new FormData();
-      // formData.append("video", file);
-      // formData.append("projectId", project.id);
-      // await uploadVideoToBackend(formData);
+        // Small delay to ensure MongoDB update is committed
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
-      setIsDialogOpen(false);
+        // Reload videos from backend to get the new video with direct streaming URL
+        const projectData = await projectsAPI.getById(project.id);
+        console.log("Project data after upload:", projectData);
+        console.log("Does projectData have videos?", "videos" in projectData);
+        console.log("Full projectData keys:", Object.keys(projectData));
+        const projectVideos = projectData.videos || [];
+        console.log(
+          "Videos after upload:",
+          projectVideos.length,
+          projectVideos
+        );
+
+        // Convert backend video data to frontend format with direct streaming URLs (YouTube-style)
+        const { supabase } = await import("../lib/supabase.js");
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        const loadedVideos = await Promise.all(
+          projectVideos.map(async (video) => {
+            try {
+              if (!session?.user?.id) {
+                throw new Error("Unauthorized: User ID required");
+              }
+
+              // Use direct URL with query param for authentication (YouTube-style streaming)
+              const videoUrl = `${projectsAPI.getVideoUrl(
+                project.id,
+                video.id
+              )}?userId=${session.user.id}`;
+
+              console.log(
+                `Using direct streaming URL for ${video.id}:`,
+                videoUrl
+              );
+
+              return {
+                type: "file",
+                url: videoUrl,
+                name: video.filename,
+                videoId: video.id,
+              };
+            } catch (error) {
+              console.error(`Error loading video ${video.id}:`, error);
+              // Fallback to regular URL if auth fails
+              return {
+                type: "file",
+                url: projectsAPI.getVideoUrl(project.id, video.id),
+                name: video.filename,
+                videoId: video.id,
+              };
+            }
+          })
+        );
+
+        setVideos(loadedVideos);
+        setIsDialogOpen(false);
+
+        // Reset file input so it can be clicked again
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      } catch (error) {
+        console.error("Error uploading video:", error);
+        alert(`Failed to upload video: ${error.message}`);
+      }
     } else {
       alert("Please select a video file (mp4, webm, etc.)");
     }
@@ -188,27 +266,29 @@ export function ProjectView({ project, onBack }) {
     let videoId = null;
     try {
       setIsDialogOpen(false);
-      
+
       // CRITICAL: Add Overshoot camera to videos list FIRST so the video element gets rendered
       videoId = Date.now();
       setVideos((prev) => [...prev, { type: "overshoot", id: videoId }]);
-      
+
       // Wait for React to render the video element (use requestAnimationFrame for better timing)
-      await new Promise(resolve => {
+      await new Promise((resolve) => {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             setTimeout(resolve, 50); // Small additional delay
           });
         });
       });
-      
+
       // Now start the camera - the video element should be in the DOM
       await startOvershoot();
     } catch (error) {
       console.error("Error starting Overshoot vision:", error);
       // Remove the video entry if start failed
       if (videoId !== null) {
-        setVideos((prev) => prev.filter((v) => v.type !== "overshoot" || v.id !== videoId));
+        setVideos((prev) =>
+          prev.filter((v) => v.type !== "overshoot" || v.id !== videoId)
+        );
       }
       alert(
         error.message ||
@@ -227,18 +307,234 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
-  // Cleanup on unmount
+  // Load videos from backend when project is loaded
+  useEffect(() => {
+    const loadVideos = async () => {
+      setIsLoadingVideos(true);
+
+      // No blob URL cleanup needed - using direct streaming URLs now
+
+      try {
+        console.log("Loading videos for project:", project.id);
+        const projectData = await projectsAPI.getById(project.id);
+        console.log("Project data received:", projectData);
+        console.log(
+          "Full project data structure:",
+          JSON.stringify(projectData, null, 2)
+        );
+        const projectVideos = projectData.videos || [];
+        console.log("Videos found:", projectVideos.length, projectVideos);
+
+        if (projectVideos.length === 0) {
+          console.log("No videos found in project");
+          setVideos([]);
+          setIsLoadingVideos(false);
+          return;
+        }
+
+        // Convert backend video data to frontend format with direct streaming URLs (YouTube-style)
+        // Filter out videos that can't be loaded (e.g., missing files)
+        const loadedVideosResults = await Promise.allSettled(
+          projectVideos.map(async (video) => {
+            try {
+              console.log(`Loading video: ${video.id} - ${video.filename}`);
+
+              // Get session for authentication
+              const { supabase } = await import("../lib/supabase.js");
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+
+              if (!session?.user?.id) {
+                throw new Error("Unauthorized: User ID required");
+              }
+
+              // Use direct URL with query param for authentication (YouTube-style streaming)
+              const videoUrl = `${projectsAPI.getVideoUrl(
+                project.id,
+                video.id
+              )}?userId=${session.user.id}`;
+
+              console.log(
+                `Using direct streaming URL for ${video.id}:`,
+                videoUrl
+              );
+
+              return {
+                type: "file",
+                url: videoUrl,
+                name: video.filename,
+                videoId: video.id,
+              };
+            } catch (error) {
+              console.error(`Error loading video ${video.id}:`, error);
+
+              // If video file doesn't exist (404), throw error to filter it out
+              if (
+                error.message?.includes("Not Found") ||
+                error.message?.includes("404")
+              ) {
+                throw new Error(`Video file not found: ${video.filename}`);
+              }
+
+              throw error;
+            }
+          })
+        );
+
+        // Filter out failed video loads (e.g., missing files) and keep only successful ones
+        const loadedVideos = loadedVideosResults
+          .filter((result) => result.status === "fulfilled")
+          .map((result) => result.value);
+
+        console.log("Loaded videos:", loadedVideos);
+        setVideos(loadedVideos);
+      } catch (error) {
+        console.error("Error loading videos:", error);
+        setVideos([]);
+      } finally {
+        setIsLoadingVideos(false);
+      }
+    };
+
+    if (project.id) {
+      loadVideos();
+    }
+
+    // No cleanup needed - using direct streaming URLs now
+  }, [project.id]);
+
+  // Track which videos have been processed to avoid re-processing
+  const processedVideoIdsRef = useRef(new Set());
+
+  // Process videos with Overshoot SDK when they're loaded
+  useEffect(() => {
+    const processVideosWithOvershoot = async () => {
+      // Only process file videos (not overshoot camera feeds)
+      const fileVideos = videos.filter(
+        (video) => video.type === "file" && video.videoId
+      );
+
+      if (fileVideos.length === 0) {
+        return;
+      }
+
+      // Filter out videos that have already been processed
+      const videosToProcess = fileVideos.filter(
+        (video) => !processedVideoIdsRef.current.has(video.videoId)
+      );
+
+      if (videosToProcess.length === 0) {
+        return; // All videos already processed
+      }
+
+      console.log(
+        `Processing ${videosToProcess.length} new video(s) with Overshoot SDK...`
+      );
+
+      // Process each video with Overshoot SDK
+      for (const video of videosToProcess) {
+        try {
+          console.log(
+            `[${video.name}] Fetching video file for Overshoot processing...`
+          );
+
+          // Get session for authentication
+          const { supabase } = await import("../lib/supabase.js");
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+
+          if (!session?.user?.id) {
+            console.warn(
+              `[${video.name}] Skipping Overshoot processing: Unauthorized`
+            );
+            continue;
+          }
+
+          // Fetch the video as a blob
+          const videoUrl = `${projectsAPI.getVideoUrl(
+            project.id,
+            video.videoId
+          )}?userId=${session.user.id}`;
+          const response = await fetch(videoUrl);
+
+          if (!response.ok) {
+            console.error(
+              `[${video.name}] Failed to fetch video for processing: ${response.statusText}`
+            );
+            continue;
+          }
+
+          const blob = await response.blob();
+
+          // Convert blob to File object (Overshoot SDK expects File)
+          // Extract filename from video name or use a default
+          const filename = video.name || `video-${video.videoId}.mp4`;
+          const videoFile = new File([blob], filename, {
+            type: blob.type || "video/mp4",
+          });
+
+          console.log(`[${video.name}] Starting Overshoot processing...`);
+
+          // Mark video as being processed
+          processedVideoIdsRef.current.add(video.videoId);
+
+          // Process video file with Overshoot SDK (non-blocking)
+          processVideoFile(videoFile, video.videoId, video.name).catch(
+            (error) => {
+              console.error(
+                `[${video.name}] Error processing video with Overshoot:`,
+                error
+              );
+              // Remove from processed set on error so it can be retried
+              processedVideoIdsRef.current.delete(video.videoId);
+            }
+          );
+        } catch (error) {
+          console.error(
+            `[${video.name}] Error setting up Overshoot processing:`,
+            error
+          );
+        }
+      }
+    };
+
+    if (videos.length > 0 && !isLoadingVideos) {
+      processVideosWithOvershoot();
+    }
+  }, [videos, isLoadingVideos, project.id, processVideoFile]);
+
+  // Function to play video with fallback to muted if needed
+  const playVideoWithFallback = async (videoElement) => {
+    try {
+      // Try to play with sound first
+      videoElement.muted = false;
+      await videoElement.play();
+    } catch (error) {
+      // If autoplay with sound is blocked, try muted
+      try {
+        videoElement.muted = true;
+        await videoElement.play();
+      } catch (mutedError) {
+        // Autoplay may be blocked by browser policy
+        console.log("Autoplay prevented:", mutedError);
+      }
+    }
+  };
+
+  // Cleanup webcam and video processing on unmount
   useEffect(() => {
     return () => {
-      // Clean up file URLs
-      videos.forEach((video) => {
-        if (video.type === "file" && video.url) {
-          URL.revokeObjectURL(video.url);
-        }
-      });
-      // Overshoot cleanup is handled by the hook
+      if (webcamStream) {
+        webcamStream.getTracks().forEach((track) => track.stop());
+      }
+      // Cleanup video file processing
+      cleanupVideoProcessing();
+      // Note: We don't need to revoke URLs for backend videos
+      // Only revoke blob URLs if we add any
     };
-  }, [videos]);
+  }, [webcamStream, cleanupVideoProcessing]);
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -267,65 +563,138 @@ export function ProjectView({ project, onBack }) {
         >
           <div className="p-4 h-full">
             {/* Display videos if any */}
-            {videos.length > 0 ? (
-              <div className="grid grid-cols-2 gap-4 h-full">
+            {isLoadingVideos ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-white">Loading videos...</div>
+              </div>
+            ) : videos.length > 0 ? (
+              <div
+                className={`flex ${
+                  videos.length === 1 ? "justify-center" : "justify-start"
+                } items-center gap-4 h-full p-4 overflow-x-auto`}
+              >
                 {videos.map((video, index) => (
                   <div
                     key={index}
-                    className="relative bg-black rounded overflow-hidden"
+                    className={`flex items-center gap-3 ${
+                      videos.length > 1 ? "flex-1" : ""
+                    }`}
+                    style={
+                      videos.length > 1 ? { maxWidth: "calc(50% - 8px)" } : {}
+                    }
                   >
-                    {video.type === "file" ? (
-                      <video
-                        src={video.url}
-                        controls
-                        className="w-full h-full object-contain"
-                        style={{ maxHeight: "100%" }}
-                      >
-                        Your browser does not support the video tag.
-                      </video>
-                    ) : video.type === "overshoot" ? (
-                      <div className="w-full h-full relative bg-black" style={{ minHeight: "300px" }}>
+                    <div
+                      className="relative bg-gray-900 rounded-lg overflow-hidden border-2 border-gray-600 shadow-lg video-container"
+                      style={{
+                        width: "100%",
+                        aspectRatio: "16/9",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      onMouseEnter={() => setHoveredVideoIndex(index)}
+                      onMouseLeave={() => setHoveredVideoIndex(null)}
+                    >
+                      {video.type === "file" ? (
                         <video
-                          ref={overshootVideoRef}
+                          ref={(el) => {
+                            videoRefs.current[`video-${index}`] = el;
+                            if (el) {
+                              // Ensure video plays when element is mounted
+                              const playVideo = async () => {
+                                await playVideoWithFallback(el);
+                              };
+
+                              // If video is already loaded, play immediately
+                              if (el.readyState >= 2) {
+                                playVideo();
+                              } else {
+                                // Otherwise, wait for video to load
+                                const handleCanPlay = () => {
+                                  playVideo();
+                                  el.removeEventListener(
+                                    "canplay",
+                                    handleCanPlay
+                                  );
+                                };
+                                el.addEventListener("canplay", handleCanPlay);
+                              }
+                            }
+                          }}
+                          src={video.url}
+                          controls={hoveredVideoIndex === index}
                           autoPlay
                           playsInline
-                          muted
                           className="w-full h-full object-contain"
-                          style={{ 
-                            width: "100%",
-                            height: "100%",
-                            minHeight: "300px",
-                            backgroundColor: "#000",
-                            display: "block"
-                          }}
                         >
                           Your browser does not support the video tag.
                         </video>
-                        {overshootError && (
-                          <div className="absolute top-2 left-2 bg-red-600 text-white px-3 py-1 rounded text-sm">
-                            {overshootError}
-                          </div>
-                        )}
-                        {isOvershootConnecting && (
-                          <div className="absolute top-2 left-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
-                            Connecting...
-                          </div>
-                        )}
-                        {isOvershootActive && (
-                          <div className="absolute top-2 left-2 bg-green-600 text-white px-3 py-1 rounded text-sm">
-                            Processing
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
-                    {video.type === "overshoot" && (
-                      <button
-                        onClick={stopWebcam}
-                        className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
-                        disabled={isOvershootConnecting}
+                      ) : video.type === "overshoot" ? (
+                        <div
+                          className="w-full h-full relative bg-black"
+                          style={{ minHeight: "300px" }}
+                        >
+                          <video
+                            ref={overshootVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full h-full object-contain"
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              minHeight: "300px",
+                              backgroundColor: "#000",
+                              display: "block",
+                            }}
+                          >
+                            Your browser does not support the video tag.
+                          </video>
+                          {overshootError && (
+                            <div className="absolute top-2 left-2 bg-red-600 text-white px-3 py-1 rounded text-sm">
+                              {overshootError}
+                            </div>
+                          )}
+                          {isOvershootConnecting && (
+                            <div className="absolute top-2 left-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
+                              Connecting...
+                            </div>
+                          )}
+                          {isOvershootActive && (
+                            <div className="absolute top-2 left-2 bg-green-600 text-white px-3 py-1 rounded text-sm">
+                              Processing
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                      {video.type === "overshoot" && (
+                        <button
+                          onClick={stopWebcam}
+                          className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                          disabled={isOvershootConnecting}
+                        >
+                          {isOvershootConnecting
+                            ? "Stopping..."
+                            : "Stop Camera"}
+                        </button>
+                      )}
+                    </div>
+                    {/* Plus button to add another video - only show if less than 2 videos */}
+                    {videos.length < 2 && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log("Plus button clicked, opening dialog");
+                          setIsDialogOpen(true);
+                        }}
+                        className="h-12 w-12 rounded-full bg-gray-800 border-2 border-gray-600 hover:bg-gray-700 hover:border-gray-500 text-white shrink-0"
+                        title="Add another video"
                       >
-                        {isOvershootConnecting ? "Stopping..." : "Stop Camera"}
-                      </button>
+                        <IconPlus className="h-6 w-6" />
+                      </Button>
                     )}
                   </div>
                 ))}
