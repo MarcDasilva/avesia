@@ -239,3 +239,16 @@ def test_node_datatypes(client):
     assert properties["num_field"]["type"] == "number"
     assert properties["str_field"]["type"] == "string"
 
+
+def test_get_overshoot_config(client):
+    """Test getting Overshoot SDK configuration"""
+    response = client.get("/api/overshoot/config")
+    
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    
+    assert "apiUrl" in data
+    assert "apiKey" in data
+    assert "hasApiKey" in data
+    assert isinstance(data["hasApiKey"], bool)
+
