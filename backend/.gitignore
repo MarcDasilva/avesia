@@ -5,4 +5,3 @@ alerts/email_alerts_temp.json
 __pycache__/
 *.pyc
 *.pyo
-*.log
