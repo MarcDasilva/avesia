@@ -22,7 +22,9 @@ const app = express()
 app.use(express.json())
 app.use(express.static(__dirname)) // Serve static files (HTML, etc.)
 
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000'
+// Python backend URL - defaults to port 3001 to match unified backend
+// Can be overridden via PYTHON_BACKEND_URL env var if backend runs on different port
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:3001'
 const NODE_SERVICE_PORT = process.env.NODE_SERVICE_PORT || 3001
 
 let currentPrompt = process.env.INITIAL_PROMPT || 'explain surroundings'

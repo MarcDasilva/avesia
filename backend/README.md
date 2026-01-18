@@ -1,10 +1,12 @@
 # Avesia Backend
 
+Backend server for Avesia project management platform using FastAPI, MongoDB, and Overshoot SDK integration.
+
 ## Architecture Overview
 
 This backend consists of two services that work together:
 
-1. **Python FastAPI Backend** (`app.py`) - Receives results, manages node configurations, and controls the Node.js service
+1. **Python FastAPI Backend** (`main.py`) - Receives results, manages node configurations, controls the Node.js service, and provides project management API
 2. **Node.js Overshoot Service** (`overshoot_service/`) - Serves the browser interface that processes live video using Overshoot SDK
 
 ## Communication Flow
@@ -14,6 +16,7 @@ Browser (Overshoot SDK)  →  Python Backend (FastAPI)
        ↓                              ↓
    Processes video           Receives structured results
    Sends JSON results        Manages node configurations
+                            Manages projects (MongoDB)
                             Controls via API
 ```
 
@@ -73,14 +76,37 @@ npm install
 
 ### 3. Environment Configuration
 
-Create a `.env` file in the `backend/` directory:
+Create a `.env` file in the `backend/` directory (see `.env.template` for reference):
 
 ```env
+# MongoDB Configuration
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority
+DATABASE_NAME=avesia
+PORT=3001
+FRONTEND_URL=http://localhost:5173
+
+# Overshoot SDK Configuration
 OVERSHOOT_API_KEY=your-api-key-here
-PYTHON_BACKEND_URL=http://localhost:8000
+PYTHON_BACKEND_URL=http://localhost:3001
 NODE_SERVICE_PORT=3001
 NODE_SERVICE_URL=http://localhost:3001
+
+# Email Alerts Configuration
+SENDER_EMAIL=your-email@example.com
+SENDER_PASSWORD=your-app-password
 ```
+
+**For MongoDB Atlas:**
+- Go to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+- Create a free cluster if you don't have one
+- Click "Connect" on your cluster
+- Choose "Connect your application"
+- Copy the connection string
+- Replace `<password>` with your database user password
+- Replace `<username>` with your database username
+- The connection string format: `mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority`
+
+See `ATLAS_SETUP.md` and `SETUP_ENV.md` for detailed MongoDB Atlas setup instructions.
 
 ### 4. Node Configuration
 
@@ -117,12 +143,19 @@ Node.js service runs on `http://localhost:3001`
 
 ### Start Python Backend (Terminal 2)
 
+**Development mode with uvicorn:**
 ```bash
 cd backend
-python app.py
+uvicorn main:app --reload --port 3001
 ```
 
-Python backend runs on `http://localhost:8000`
+**Or using the Python script directly:**
+```bash
+cd backend
+python main.py
+```
+
+Python backend runs on `http://localhost:3001` by default (configurable via `PORT` environment variable).
 
 **Note:** Start Node.js first, then Python. Python will automatically load nodes from `sample_nodes.json` and send them to Node.js.
 
@@ -134,9 +167,17 @@ Navigate to: `http://localhost:3001`
 2. Click **"Start Camera"**
 3. Results will appear automatically with structured JSON based on your nodes
 
+## API Documentation
+
+FastAPI automatically generates interactive API documentation:
+- Swagger UI: `http://localhost:3001/docs`
+- ReDoc: `http://localhost:3001/redoc`
+
 ## API Endpoints
 
-### Python Backend (FastAPI)
+### Overshoot SDK / Node System
+
+#### Python Backend (FastAPI)
 
 - `GET /` - Root endpoint
 - `POST /api/results` - Receives results from browser (called automatically)
@@ -144,11 +185,13 @@ Navigate to: `http://localhost:3001`
 - `GET /api/nodes` - Get current nodes configuration
 - `POST /api/nodes` - Update nodes configuration
 - `POST /api/nodes/reload` - Reload nodes from `sample_nodes.json`
+- `DELETE /api/nodes` - Clear all nodes configuration
 - `POST /api/prompt` - Send prompt update to Node.js service
 - `POST /api/control` - Control Node.js service (start/stop)
-- `GET /health` - Health check
+- `GET /health` - Health check (checks Node.js service status)
+- `GET /api/health` - Health check (checks MongoDB status)
 
-### Node.js Service (Express)
+#### Node.js Service (Express)
 
 - `GET /` - Redirects to browser interface
 - `GET /api/nodes` - Get current nodes configuration
@@ -156,30 +199,46 @@ Navigate to: `http://localhost:3001`
 - `POST /api/prompt` - Update detection prompt (called by Python)
 - `GET /health` - Health check
 
+### Project Management API
+
+- `GET /api/projects` - Get all projects for the authenticated user
+  - Headers: `X-User-Id: <user-id>`
+- `POST /api/projects` - Create a new project
+  - Headers: `X-User-Id: <user-id>`
+  - Body: `{ "name": "Project Name" }`
+- `GET /api/projects/{id}` - Get a specific project
+- `PUT /api/projects/{id}` - Update a project
+  - Body: `{ "name": "Updated Name" }`
+- `DELETE /api/projects/{id}` - Delete a project
+
+### Authentication
+
+The API expects the user ID in the `X-User-Id` header for project management endpoints.
+
 ## Usage Examples
 
 ### Get Current Nodes
 
 ```bash
-curl http://localhost:8000/api/nodes
+curl http://localhost:3001/api/nodes
 ```
 
 ### Reload Nodes from File
 
 ```bash
-curl -X POST http://localhost:8000/api/nodes/reload
+curl -X POST http://localhost:3001/api/nodes/reload
 ```
 
 ### Get Recent Results
 
 ```bash
-curl http://localhost:8000/api/results
+curl http://localhost:3001/api/results
 ```
 
 ### Update Nodes Programmatically
 
 ```bash
-curl -X POST http://localhost:8000/api/nodes \
+curl -X POST http://localhost:3001/api/nodes \
   -H "Content-Type: application/json" \
   -d '{
     "nodes": [
@@ -192,6 +251,23 @@ curl -X POST http://localhost:8000/api/nodes \
   }'
 ```
 
+### Create a Project
+
+```bash
+curl -X POST http://localhost:3001/api/projects \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: user123" \
+  -d '{
+    "name": "My Project"
+  }'
+```
+
+### Get All Projects
+
+```bash
+curl -H "X-User-Id: user123" http://localhost:3001/api/projects
+```
+
 ## How It Works
 
 1. **Python backend** loads nodes from `sample_nodes.json` on startup
@@ -200,6 +276,7 @@ curl -X POST http://localhost:8000/api/nodes \
 4. **Overshoot SDK** processes video with structured output schema
 5. **Results are sent to Python** as structured JSON with typed values
 6. **Python backend** receives and processes the structured results
+7. **Projects are stored** in MongoDB Atlas for persistence
 
 ## Changing Node Configuration
 
@@ -211,6 +288,53 @@ To change what the system detects:
 
 The new nodes will be automatically loaded and applied.
 
+## MongoDB Atlas Setup
+
+1. **Create a MongoDB Atlas Account:**
+   - Go to [https://www.mongodb.com/cloud/atlas](https://www.mongodb.com/cloud/atlas)
+   - Sign up for a free account (free tier available)
+
+2. **Create a Cluster:**
+   - Click "Build a Database"
+   - Choose the FREE tier (M0 Sandbox)
+   - Select a cloud provider and region
+   - Click "Create"
+
+3. **Create a Database User:**
+   - Go to "Database Access" in the left sidebar
+   - Click "Add New Database User"
+   - Choose "Password" authentication
+   - Enter a username and password (save these!)
+   - Set privileges to "Read and write to any database"
+   - Click "Add User"
+
+4. **Whitelist Your IP Address:**
+   - Go to "Network Access" in the left sidebar
+   - Click "Add IP Address"
+   - For development, click "Allow Access from Anywhere" (adds `0.0.0.0/0`)
+   - For production, add only your server's IP address
+   - Click "Confirm"
+
+5. **Get Your Connection String:**
+   - Go to "Database" → click "Connect" on your cluster
+   - Choose "Connect your application"
+   - Select "Python" and version "3.6 or later"
+   - Copy the connection string
+   - Replace `<password>` with your database user password
+   - Replace `<username>` with your database username
+
+6. **Update your `.env` file:**
+   ```
+   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority
+   DATABASE_NAME=avesia
+   ```
+
+**Connection String Format:**
+- Atlas: `mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority`
+- Make sure to URL-encode special characters in your password if needed
+
+See `ATLAS_SETUP.md` and `SETUP_ENV.md` for more detailed setup instructions.
+
 ## Troubleshooting
 
 ### Camera Not Starting
@@ -220,7 +344,7 @@ The new nodes will be automatically loaded and applied.
 - Check VPN connection (required for Overshoot API)
 
 ### No Results Appearing
-- Verify nodes are loaded: `curl http://localhost:8000/api/nodes`
+- Verify nodes are loaded: `curl http://localhost:3001/api/nodes`
 - Check browser console for SDK errors
 - Verify camera feed is visible on the page
 - Check Python terminal for received results
@@ -231,7 +355,20 @@ The new nodes will be automatically loaded and applied.
 - Verify `.env` file has correct API key
 - Check network/VPN connection for Overshoot API
 
+### MongoDB Connection Issues
+- Verify your `.env` file has the correct `MONGODB_URI`
+- Check that your IP address is whitelisted in MongoDB Atlas
+- Ensure your database user has the correct permissions
+- Verify the connection string format is correct
+- See `TROUBLESHOOTING.md` for detailed MongoDB troubleshooting
+
 ### Stream Errors
 - The system automatically attempts to reconnect on stream loss
 - If persistent, try stopping and restarting the camera
 - Check browser console for detailed error messages
+
+## Additional Documentation
+
+- `ATLAS_SETUP.md` - Detailed MongoDB Atlas setup guide
+- `SETUP_ENV.md` - Environment variable setup instructions
+- `TROUBLESHOOTING.md` - Common issues and solutions
