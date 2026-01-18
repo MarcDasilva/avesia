@@ -423,6 +423,7 @@
         </div>
     </div>
 
+    <script src="node_options.js"></script>
     <script>
         // Global state
         let nodes = {};
@@ -435,6 +436,11 @@
         let canvasOffset = { x: 0, y: 0 };
         let isPanning = false;
         let panStart = { x: 0, y: 0 };
+
+        // Use options from node_options.js
+        const conditionOptions = ConditionOptions;
+        const listenerOptions = ListenerOptions;
+        const eventOptions = EventOptions;
 
         const canvas = document.getElementById('canvas');
         const arrowSvg = document.getElementById('arrow-svg');
@@ -451,7 +457,12 @@
             const node = {
                 id: id,
                 type: type,
-                data: { name: `${type}_${nodeCounter[type]}` },
+                data: { 
+                    name: `${type}_${nodeCounter[type]}`,
+                    condition_type: type === 'condition' ? conditionOptions[0] : undefined,
+                    listener_type: type === 'listener' ? listenerOptions[0] : undefined,
+                    event_type: type === 'event' ? eventOptions[0] : undefined
+                },
                 position: { x: 300 + Math.random() * 400, y: 200 + Math.random() * 300 },
                 connections: []
             };
@@ -469,17 +480,98 @@
             nodeEl.style.left = node.position.x + 'px';
             nodeEl.style.top = node.position.y + 'px';
 
-            nodeEl.innerHTML = `
-                <div class="node-header">${node.type.toUpperCase()}</div>
-                <div class="node-content">
-                    <input class="node-input" type="text" value="${node.data.name}" 
-                           onchange="updateNodeData('${node.id}', this.value)"
-                           onclick="event.stopPropagation()">
-                </div>
-                <div class="node-id">${node.id.substring(0, 20)}...</div>
-                <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
-            `;
+            let contentHtml = '';
+            
+            if (node.type === 'condition') {
+                // Condition node with dropdown
+                const currentConditionType = node.data.condition_type || conditionOptions[0];
+                const isCustom = currentConditionType === 'custom' || !conditionOptions.includes(currentConditionType);
+                const customValue = isCustom && currentConditionType !== 'custom' ? currentConditionType : '';
+                
+                contentHtml = `
+                    <div class="node-header">${node.type.toUpperCase()}</div>
+                    <div class="node-content">
+                        <select class="node-input" onchange="updateConditionType('${node.id}', this.value)" onclick="event.stopPropagation()">
+                            ${conditionOptions.map(opt => 
+                                `<option value="${opt}" ${currentConditionType === opt || (isCustom && opt === 'custom') ? 'selected' : ''}>${opt}</option>`
+                            ).join('')}
+                        </select>
+                        <input class="node-input" type="text" 
+                               id="custom-input-${node.id}" 
+                               placeholder="Enter custom condition type"
+                               style="margin-top: 5px; display: ${isCustom ? 'block' : 'none'}"
+                               value="${customValue}"
+                               onchange="updateCustomConditionType('${node.id}', this.value)"
+                               onclick="event.stopPropagation()">
+                    </div>
+                    <div class="node-id">${node.id.substring(0, 20)}...</div>
+                    <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
+                `;
+            } else if (node.type === 'listener') {
+                // Listener node with dropdown
+                const currentListenerType = node.data.listener_type || listenerOptions[0];
+                const isCustom = currentListenerType === 'custom' || !listenerOptions.includes(currentListenerType);
+                const customValue = isCustom && currentListenerType !== 'custom' ? currentListenerType : '';
+                
+                contentHtml = `
+                    <div class="node-header">${node.type.toUpperCase()}</div>
+                    <div class="node-content">
+                        <select class="node-input" onchange="updateListenerType('${node.id}', this.value)" onclick="event.stopPropagation()">
+                            ${listenerOptions.map(opt => 
+                                `<option value="${opt}" ${currentListenerType === opt || (isCustom && opt === 'custom') ? 'selected' : ''}>${opt}</option>`
+                            ).join('')}
+                        </select>
+                        <input class="node-input" type="text" 
+                               id="custom-input-${node.id}" 
+                               placeholder="Enter custom listener type"
+                               style="margin-top: 5px; display: ${isCustom ? 'block' : 'none'}"
+                               value="${customValue}"
+                               onchange="updateCustomListenerType('${node.id}', this.value)"
+                               onclick="event.stopPropagation()">
+                    </div>
+                    <div class="node-id">${node.id.substring(0, 20)}...</div>
+                    <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
+                `;
+            } else if (node.type === 'event') {
+                // Event node with dropdown
+                const currentEventType = node.data.event_type || eventOptions[0];
+                const isCustom = currentEventType === 'custom' || !eventOptions.includes(currentEventType);
+                const customValue = isCustom && currentEventType !== 'custom' ? currentEventType : '';
+                
+                contentHtml = `
+                    <div class="node-header">${node.type.toUpperCase()}</div>
+                    <div class="node-content">
+                        <select class="node-input" onchange="updateEventType('${node.id}', this.value)" onclick="event.stopPropagation()">
+                            ${eventOptions.map(opt => 
+                                `<option value="${opt}" ${currentEventType === opt || (isCustom && opt === 'custom') ? 'selected' : ''}>${opt}</option>`
+                            ).join('')}
+                        </select>
+                        <input class="node-input" type="text" 
+                               id="custom-input-${node.id}" 
+                               placeholder="Enter custom event type"
+                               style="margin-top: 5px; display: ${isCustom ? 'block' : 'none'}"
+                               value="${customValue}"
+                               onchange="updateCustomEventType('${node.id}', this.value)"
+                               onclick="event.stopPropagation()">
+                    </div>
+                    <div class="node-id">${node.id.substring(0, 20)}...</div>
+                    <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
+                `;
+            } else {
+                // Regular node with text input (fallback)
+                contentHtml = `
+                    <div class="node-header">${node.type.toUpperCase()}</div>
+                    <div class="node-content">
+                        <input class="node-input" type="text" value="${node.data.name}" 
+                               onchange="updateNodeData('${node.id}', this.value)"
+                               onclick="event.stopPropagation()">
+                    </div>
+                    <div class="node-id">${node.id.substring(0, 20)}...</div>
+                    <div class="delete-btn" onclick="deleteNode('${node.id}')">×</div>
+                `;
+            }
 
+            nodeEl.innerHTML = contentHtml;
             nodeEl.addEventListener('mousedown', onNodeMouseDown);
             nodeEl.addEventListener('click', onNodeClick);
             
@@ -490,6 +582,81 @@
         function updateNodeData(nodeId, newName) {
             if (nodes[nodeId]) {
                 nodes[nodeId].data.name = newName;
+                saveToLocalStorage();
+            }
+        }
+
+        // Update condition type from dropdown
+        function updateConditionType(nodeId, conditionType) {
+            if (nodes[nodeId]) {
+                const customInput = document.getElementById(`custom-input-${nodeId}`);
+                
+                if (conditionType === 'custom') {
+                    customInput.style.display = 'block';
+                    nodes[nodeId].data.condition_type = customInput.value || 'custom';
+                } else {
+                    customInput.style.display = 'none';
+                    nodes[nodeId].data.condition_type = conditionType;
+                }
+                
+                saveToLocalStorage();
+            }
+        }
+
+        // Update custom condition type from text input
+        function updateCustomConditionType(nodeId, customValue) {
+            if (nodes[nodeId]) {
+                nodes[nodeId].data.condition_type = customValue || 'custom';
+                saveToLocalStorage();
+            }
+        }
+
+        // Update listener type from dropdown
+        function updateListenerType(nodeId, listenerType) {
+            if (nodes[nodeId]) {
+                const customInput = document.getElementById(`custom-input-${nodeId}`);
+                
+                if (listenerType === 'custom') {
+                    customInput.style.display = 'block';
+                    nodes[nodeId].data.listener_type = customInput.value || 'custom';
+                } else {
+                    customInput.style.display = 'none';
+                    nodes[nodeId].data.listener_type = listenerType;
+                }
+                
+                saveToLocalStorage();
+            }
+        }
+
+        // Update custom listener type from text input
+        function updateCustomListenerType(nodeId, customValue) {
+            if (nodes[nodeId]) {
+                nodes[nodeId].data.listener_type = customValue || 'custom';
+                saveToLocalStorage();
+            }
+        }
+
+        // Update event type from dropdown
+        function updateEventType(nodeId, eventType) {
+            if (nodes[nodeId]) {
+                const customInput = document.getElementById(`custom-input-${nodeId}`);
+                
+                if (eventType === 'custom') {
+                    customInput.style.display = 'block';
+                    nodes[nodeId].data.event_type = customInput.value || 'custom';
+                } else {
+                    customInput.style.display = 'none';
+                    nodes[nodeId].data.event_type = eventType;
+                }
+                
+                saveToLocalStorage();
+            }
+        }
+
+        // Update custom event type from text input
+        function updateCustomEventType(nodeId, customValue) {
+            if (nodes[nodeId]) {
+                nodes[nodeId].data.event_type = customValue || 'custom';
                 saveToLocalStorage();
             }
         }

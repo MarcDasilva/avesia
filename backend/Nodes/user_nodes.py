@@ -9,6 +9,7 @@ import os
 import uuid
 from typing import Dict, List, Optional, Any
 from pathlib import Path
+from node_options import ConditionOptions, ListenerOptions, EventOptions
 
 
 class NodeType:
@@ -320,7 +321,51 @@ class UserNodes:
         self.nodes.clear()
     
     def export_all(self, output_file: str):
-        """Export all nodes to a single JSON file"""
+        """Export all nodes organized by listeners (same format as HTML visual editor)"""
+        self.get_all_nodes()
+        
+        export_data = {
+            "listeners": [],
+            "total_listeners": 0
+        }
+        
+        # Get all listener nodes
+        listener_nodes = [node for node in self.nodes.values() if node.node_type == NodeType.LISTENER]
+        
+        for listener_node in listener_nodes:
+            listener_data = {
+                "listener_id": listener_node.node_id,
+                "listener_data": listener_node.data,
+                "conditions": [],
+                "events": []
+            }
+            
+            # Find all conditions connected to this listener
+            for cond_id, cond_node in self.nodes.items():
+                if cond_node.node_type == NodeType.CONDITION and listener_node.node_id in cond_node.next_nodes:
+                    listener_data["conditions"].append({
+                        "condition_id": cond_node.node_id,
+                        "condition_data": cond_node.data
+                    })
+            
+            # Find all events connected to this listener
+            for event_id in listener_node.next_nodes:
+                event_node = self.nodes.get(event_id)
+                if event_node and event_node.node_type == NodeType.EVENT:
+                    listener_data["events"].append({
+                        "event_id": event_node.node_id,
+                        "event_data": event_node.data
+                    })
+            
+            export_data["listeners"].append(listener_data)
+        
+        export_data["total_listeners"] = len(export_data["listeners"])
+        
+        with open(output_file, 'w') as f:
+            json.dump(export_data, f, indent=2)
+    
+    def export_all_flat(self, output_file: str):
+        """Export all nodes in flat structure (legacy format)"""
         self.get_all_nodes()
         export_data = {
             "nodes": [node.to_dict() for node in self.nodes.values()]
@@ -347,23 +392,80 @@ def example_usage():
     # Initialize the system
     user_nodes = UserNodes()
     
-    # Create nodes
-    condition1 = user_nodes.create_condition(data={"name": "person_detected", "threshold": 0.8})
-    listener1 = user_nodes.create_listener(data={"name": "motion_sensor", "type": "camera"})
-    event1 = user_nodes.create_event(data={"action": "send_alert", "message": "Person detected"})
-    event2 = user_nodes.create_event(data={"action": "log_event", "message": "Detection logged"})
+    # Clear old data from previous runs
+    import shutil
+    if os.path.exists(user_nodes.storage_path):
+        shutil.rmtree(user_nodes.storage_path)
+    user_nodes._ensure_storage_exists()
+    user_nodes.clear_cache()
     
-    # Link nodes together
+    # Example 1: Security camera motion detection
+    print("Creating security camera motion detection setup...")
+    condition1 = user_nodes.create_condition(data={"name": "nighttime", "threshold": 0.7, "type": "time"})
+    condition2 = user_nodes.create_condition(data={"name": "motion_detected", "threshold": 0.85, "type": "motion"})
+    listener1 = user_nodes.create_listener(data={"name": "security_camera_alert", "type": "video_stream"})
+    event1 = user_nodes.create_event(data={"action": "send_notification", "recipient": "security@company.com"})
+    event2 = user_nodes.create_event(data={"action": "record_video", "duration": "30s"})
+    
     user_nodes.link_condition_to_listener(condition1.node_id, listener1.node_id)
+    user_nodes.link_condition_to_listener(condition2.node_id, listener1.node_id)
     user_nodes.link_listener_to_event(listener1.node_id, event1.node_id)
-    user_nodes.link_listener_to_event(listener1.node_id, event2.node_id)  # Listener can point to multiple events
+    user_nodes.link_listener_to_event(listener1.node_id, event2.node_id)
     
-    # Retrieve and traverse
-    full_chain = user_nodes.get_full_chain(condition1.node_id)
-    print(json.dumps(full_chain, indent=2))
+    # Example 2: Package delivery detection
+    print("Creating package delivery detection setup...")
+    condition3 = user_nodes.create_condition(data={"name": "object_at_door", "threshold": 0.9, "type": "object_detection"})
+    listener2 = user_nodes.create_listener(data={"name": "package_detector", "type": "doorbell_camera"})
+    event3 = user_nodes.create_event(data={"action": "send_sms", "message": "Package delivered!"})
+    
+    user_nodes.link_condition_to_listener(condition3.node_id, listener2.node_id)
+    user_nodes.link_listener_to_event(listener2.node_id, event3.node_id)
+    
+    # Example 3: Temperature monitoring
+    print("Creating temperature monitoring setup...")
+    condition4 = user_nodes.create_condition(data={"name": "high_temperature", "threshold": 75.0, "type": "sensor"})
+    listener3 = user_nodes.create_listener(data={"name": "temp_monitor", "type": "iot_sensor"})
+    event4 = user_nodes.create_event(data={"action": "trigger_alert", "priority": "high"})
+    event5 = user_nodes.create_event(data={"action": "activate_cooling", "duration": "15m"})
+    
+    user_nodes.link_condition_to_listener(condition4.node_id, listener3.node_id)
+    user_nodes.link_listener_to_event(listener3.node_id, event4.node_id)
+    user_nodes.link_listener_to_event(listener3.node_id, event5.node_id)
     
     # Export all nodes
+    print("\nExporting node configuration...")
     user_nodes.export_all("all_nodes_export.json")
+    
+    # Print the export data
+    with open("all_nodes_export.json", 'r') as f:
+        export_data = json.load(f)
+    print("\n" + "="*60)
+    print("📋 EXPORTED LISTENER STRUCTURE:")
+    print("="*60)
+    print(json.dumps(export_data, indent=2))
+    
+    # Process with node_processing to create prompts
+    print("\n" + "="*60)
+    print("🔄 PROCESSING NODES TO PROMPTS:")
+    print("="*60)
+    
+    try:
+        from node_processing import process_listeners
+        processed_data = process_listeners(export_data)
+        
+        print("\n✅ Generated Prompts:")
+        print(json.dumps(processed_data, indent=2))
+        
+        # Save processed output
+        with open("processed_nodes_output.json", 'w') as f:
+            json.dump(processed_data, f, indent=2)
+        print("\n💾 Processed output saved to: processed_nodes_output.json")
+        
+    except Exception as e:
+        print(f"\n⚠️  Error processing: {e}")
+        print("Export data is still available in all_nodes_export.json")
+    
+    print("="*60 + "\n")
     
     return user_nodes
 
