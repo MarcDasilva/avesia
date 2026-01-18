@@ -24,6 +24,11 @@ from bson import ObjectId
 from bson.errors import InvalidId
 import cv2
 from PIL import Image
+import sys
+
+# Add Nodes directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent / "Nodes"))
+from node_processing import process_listeners
 
 load_dotenv()
 
@@ -1206,6 +1211,111 @@ async def upload_project_thumbnail(
         "thumbnailFilename": thumbnail_filename,
         "message": "Thumbnail uploaded successfully"
     }
+
+
+@app.get("/api/projects/{project_id}/prompt")
+async def get_project_prompt(
+    project_id: str,
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Generate a vision processing prompt from project nodes"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get nodes from project
+    nodes = project.get("nodes")
+    if not nodes or not nodes.get("listeners"):
+        # Return default prompt if no nodes
+        return {
+            "prompt": "Analyze the video feed and detect any relevant objects or events.",
+            "hasNodes": False,
+            "outputSchema": {},
+            "nodes": []
+        }
+    
+    try:
+        # Process listeners to create prompts
+        processed = process_listeners(nodes)
+        processed_nodes = processed.get("nodes", [])
+        
+        if not processed_nodes:
+            return {
+                "prompt": "Analyze the video feed and detect any relevant objects or events.",
+                "hasNodes": False,
+                "outputSchema": {},
+                "nodes": []
+            }
+        
+        # Create combined prompt from processed nodes
+        prompt_parts = []
+        for node in processed_nodes:
+            node_prompt = node.get("prompt", "").strip()
+            if node_prompt:
+                prompt_parts.append(node_prompt)
+        
+        # Combine prompts - use natural language joining for better readability
+        # If multiple listeners, join with "Also" for natural flow
+        if len(prompt_parts) > 1:
+            combined_prompt = prompt_parts[0]
+            for prompt in prompt_parts[1:]:
+                combined_prompt += f". Also, {prompt}"
+        elif len(prompt_parts) == 1:
+            combined_prompt = prompt_parts[0]
+        else:
+            combined_prompt = "Analyze the video feed and detect any relevant objects or events."
+        
+        # Debug: Log the final prompt being sent to Overshoot
+        print(f"🎯 Final combined prompt for project {project_id}: {combined_prompt}")
+        print(f"📋 Number of nodes: {len(processed_nodes)}")
+        
+        # Create output schema from processed nodes
+        output_schema = {
+            "type": "object",
+            "properties": {}
+        }
+        for node in processed_nodes:
+            node_name = node.get("name", f"node_{len(output_schema['properties'])}")
+            datatype = node.get("datatype", "boolean")
+            # Map datatype to JSON schema type
+            schema_type = {
+                "boolean": "boolean",
+                "integer": "integer",
+                "number": "number",
+                "string": "string"
+            }.get(datatype, "boolean")
+            output_schema["properties"][node_name] = {"type": schema_type}
+        
+        return {
+            "prompt": combined_prompt,
+            "hasNodes": True,
+            "nodes": processed_nodes,
+            "outputSchema": output_schema
+        }
+    except Exception as e:
+        print(f"Error processing nodes to prompt: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return default prompt on error
+        return {
+            "prompt": "Analyze the video feed and detect any relevant objects or events.",
+            "hasNodes": False,
+            "error": str(e),
+            "outputSchema": {},
+            "nodes": []
+        }
 
 
 @app.put("/api/projects/{project_id}/nodes")

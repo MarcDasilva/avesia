@@ -28,35 +28,54 @@ def process_listeners(listeners_json: Dict[str, Any]) -> Dict[str, Any]:
         listener_id = listener.get("listener_id", "")
         listener_data = listener.get("listener_data", {})
         
-        # Extract goal from listener
+        # Extract description from listener - this is the primary prompt
+        listener_description = listener_data.get("description", "").strip()
         listener_type = listener_data.get("listener_type", "")
-        listener_description = listener_data.get("description", "")
+        listener_name = listener_data.get("name", "")
         
-        goal = f"{listener_type} detection"
+        # Use description as the primary prompt (user's intent)
+        # If no description, use a fallback based on listener type
         if listener_description:
-            goal += f" - {listener_description}"
+            # User provided description - use it as the main prompt
+            base_prompt = listener_description
+        elif listener_type and listener_type != "custom":
+            # Fallback: use listener type if no description
+            base_prompt = f"Detect {listener_type}"
+        else:
+            # Final fallback
+            base_prompt = "Analyze the video feed and detect relevant objects or events"
         
-        # Extract constraints from conditions
+        # Extract constraints from conditions (these refine the prompt)
         constraints = []
         for condition in listener.get("conditions", []):
             cond_data = condition.get("condition_data", {})
             cond_type = cond_data.get("condition_type", "")
-            cond_description = cond_data.get("description", "")
+            cond_description = cond_data.get("description", "").strip()
             
             constraint_parts = []
-            if cond_type:
+            if cond_description:
+                # Use condition description if provided (most specific)
+                constraint_parts.append(cond_description)
+            elif cond_type and cond_type != "custom":
+                # Fallback to condition type
                 constraint_parts.append(cond_type)
-            if cond_description is not None:
-                constraint_parts.append(f"description: {cond_description}")
             
             if constraint_parts:
-                constraints.append(" - ".join(constraint_parts))
+                constraints.append(" ".join(constraint_parts))
         
-        # Build the prompt string
+        # Build the prompt string - use description as primary, conditions as additional context
         if constraints:
-            prompt = f"Goal: {goal}, Constraints: {'; '.join(constraints)}"
+            # Combine base prompt with constraints naturally
+            constraints_text = ", ".join(constraints)
+            prompt = f"{base_prompt}. Conditions: {constraints_text}"
         else:
-            prompt = f"Goal: {goal}, Constraints: none"
+            # Just use the base prompt if no conditions
+            prompt = base_prompt
+        
+        # Clean up prompt (remove extra whitespace, newlines)
+        prompt = " ".join(prompt.split())
+        
+        print(f"📝 Listener {listener_id}: Generated prompt: {prompt}")
         
         nodes.append({
             "name": listener_id,
