@@ -193,3 +193,83 @@ export const projectsAPI = {
     return URL.createObjectURL(blob);
   },
 };
+
+// Overshoot SDK API
+export const overshootAPI = {
+  // Get nodes configuration
+  async getNodes() {
+    const response = await fetch(`${API_BASE_URL}/nodes`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch nodes: ${response.statusText}`);
+    }
+
+    return await response.json();
+  },
+
+  // Send result to backend
+  async sendResult(result, timestamp, prompt, nodeId = null) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/results`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          result: typeof result === "string" ? result : JSON.stringify(result),
+          timestamp,
+          prompt,
+          node_id: nodeId,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      if (error.name === "AbortError") {
+        console.warn("⚠️ Backend request timed out (SDK still working)");
+      } else {
+        console.error("❌ Error sending result to backend:", error);
+      }
+      throw error;
+    }
+  },
+
+  // Get recent results
+  async getResults(limit = 10) {
+    const response = await fetch(`${API_BASE_URL}/results?limit=${limit}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch results: ${response.statusText}`);
+    }
+
+    return await response.json();
+  },
+
+  // Get Overshoot SDK configuration
+  async getConfig() {
+    const response = await fetch(`${API_BASE_URL}/overshoot/config`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Overshoot config: ${response.statusText}`);
+    }
+
+    return await response.json();
+  },
+};

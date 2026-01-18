@@ -8,6 +8,7 @@ import {
 import { Button } from "./ui/button";
 import { ParticleCard } from "./MagicBento";
 import "./MagicBento.css";
+import { useOvershootVision } from "../hooks/useOvershootVision";
 import {
   Dialog,
   DialogContent,
@@ -73,6 +74,25 @@ export function ProjectView({ project, onBack }) {
   const fileInputRef = useRef(null);
   const videoRefs = useRef({}); // Refs for video elements to control playback
   const blobUrlsRef = useRef([]); // Track blob URLs for cleanup
+
+  // Overshoot SDK integration
+  const {
+    isActive: isOvershootActive,
+    isConnecting: isOvershootConnecting,
+    error: overshootError,
+    start: startOvershoot,
+    stop: stopOvershoot,
+    videoRef: overshootVideoRef,
+  } = useOvershootVision({
+    onResult: (result, isJson, timestamp) => {
+      // Results are automatically sent to backend via the hook
+      // You can add custom handling here if needed
+      console.log("Result received in ProjectView:", result);
+    },
+    onError: (error) => {
+      console.error("Overshoot error in ProjectView:", error);
+    },
+  });
 
   const onConnect = useCallback(
     (params) => {
@@ -213,32 +233,49 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
-  // Handle webcam activation
+  // Handle Overshoot camera activation
   const handleWebcamStart = async () => {
+    let videoId = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
-      });
-      setWebcamStream(stream);
-      setIsWebcamActive(true);
       setIsDialogOpen(false);
 
-      // Add webcam to videos list
-      setVideos((prev) => [...prev, { type: "webcam", stream: stream }]);
+      // CRITICAL: Add Overshoot camera to videos list FIRST so the video element gets rendered
+      videoId = Date.now();
+      setVideos((prev) => [...prev, { type: "overshoot", id: videoId }]);
+
+      // Wait for React to render the video element (use requestAnimationFrame for better timing)
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(resolve, 50); // Small additional delay
+          });
+        });
+      });
+
+      // Now start the camera - the video element should be in the DOM
+      await startOvershoot();
     } catch (error) {
-      console.error("Error accessing webcam:", error);
-      alert("Unable to access webcam. Please ensure permissions are granted.");
+      console.error("Error starting Overshoot vision:", error);
+      // Remove the video entry if start failed
+      if (videoId !== null) {
+        setVideos((prev) =>
+          prev.filter((v) => v.type !== "overshoot" || v.id !== videoId)
+        );
+      }
+      alert(
+        error.message ||
+          "Unable to start camera processing. Please check console for details."
+      );
     }
   };
 
-  // Handle webcam stop
-  const stopWebcam = () => {
-    if (webcamStream) {
-      webcamStream.getTracks().forEach((track) => track.stop());
-      setWebcamStream(null);
-      setIsWebcamActive(false);
-      setVideos((prev) => prev.filter((v) => v.type !== "webcam"));
+  // Handle Overshoot camera stop
+  const stopWebcam = async () => {
+    try {
+      await stopOvershoot();
+      setVideos((prev) => prev.filter((v) => v.type !== "overshoot"));
+    } catch (error) {
+      console.error("Error stopping Overshoot vision:", error);
     }
   };
 
@@ -465,26 +502,51 @@ export function ProjectView({ project, onBack }) {
                       >
                         Your browser does not support the video tag.
                       </video>
-                    ) : video.type === "webcam" && video.stream ? (
-                      <video
-                        ref={(el) => {
-                          if (el && video.stream) {
-                            el.srcObject = video.stream;
-                          }
-                        }}
-                        autoPlay
-                        playsInline
-                        className="w-full h-full object-contain"
+                    ) : video.type === "overshoot" ? (
+                      <div
+                        className="w-full h-full relative bg-black"
+                        style={{ minHeight: "300px" }}
                       >
-                        Your browser does not support the video tag.
-                      </video>
+                        <video
+                          ref={overshootVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-contain"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            minHeight: "300px",
+                            backgroundColor: "#000",
+                            display: "block",
+                          }}
+                        >
+                          Your browser does not support the video tag.
+                        </video>
+                        {overshootError && (
+                          <div className="absolute top-2 left-2 bg-red-600 text-white px-3 py-1 rounded text-sm">
+                            {overshootError}
+                          </div>
+                        )}
+                        {isOvershootConnecting && (
+                          <div className="absolute top-2 left-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm">
+                            Connecting...
+                          </div>
+                        )}
+                        {isOvershootActive && (
+                          <div className="absolute top-2 left-2 bg-green-600 text-white px-3 py-1 rounded text-sm">
+                            Processing
+                          </div>
+                        )}
+                      </div>
                     ) : null}
-                    {video.type === "webcam" && (
+                    {video.type === "overshoot" && (
                       <button
                         onClick={stopWebcam}
-                        className="absolute top-3 right-3 bg-red-600 text-white px-3 py-1.5 rounded hover:bg-red-700 text-sm shadow-lg z-10"
+                        className="absolute top-2 right-2 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                        disabled={isOvershootConnecting}
                       >
-                        Stop Camera
+                        {isOvershootConnecting ? "Stopping..." : "Stop Camera"}
                       </button>
                     )}
                   </div>

@@ -87,6 +87,8 @@ except Exception as e:
 # Overshoot SDK / Node System Configuration
 # ============================================================================
 NODE_SERVICE_URL = os.getenv("NODE_SERVICE_URL", "http://localhost:3001")
+OVERSHOOT_API_KEY = os.getenv("OVERSHOOT_API_KEY", "")
+OVERSHOOT_API_URL = os.getenv("OVERSHOOT_API_URL", "https://cluster1.overshoot.ai/api/v0.2")
 
 # Store results in memory (consider using a database for production)
 results_store: List[dict] = []
@@ -491,7 +493,7 @@ async def update_nodes(nodes_update: NodesUpdate):
     output_schema = convert_nodes_to_output_schema([Node(**n) for n in nodes_with_ids])
     combined_prompt = create_combined_prompt([Node(**n) for n in nodes_with_ids])
     
-    # Send to Node.js service
+    # Try to send to Node.js service (optional - frontend can use nodes directly)
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -501,20 +503,21 @@ async def update_nodes(nodes_update: NodesUpdate):
                     "outputSchema": output_schema,
                     "prompt": combined_prompt
                 },
-                timeout=10.0
+                timeout=2.0  # Short timeout since Node.js service is optional
             )
             response.raise_for_status()
-            return {
-                "success": True,
-                "message": "Nodes updated successfully",
-                "nodes": nodes_with_ids,
-                "outputSchema": output_schema,
-                "prompt": combined_prompt
-            }
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Failed to connect to Node.js service: {str(e)}")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Node.js service error: {e.response.text}")
+            print("✅ Nodes sent to Node.js service (if running)")
+    except:
+        # Node.js service is optional - frontend will use nodes directly
+        pass
+    
+    return {
+        "success": True,
+        "message": "Nodes updated successfully",
+        "nodes": nodes_with_ids,
+        "outputSchema": output_schema,
+        "prompt": combined_prompt
+    }
 
 
 @app.get("/api/nodes")
@@ -545,6 +548,16 @@ async def get_nodes():
         "count": len(nodes_store),
         "outputSchema": output_schema,
         "prompt": combined_prompt
+    }
+
+
+@app.get("/api/overshoot/config")
+async def get_overshoot_config():
+    """Get Overshoot SDK configuration for frontend"""
+    return {
+        "apiUrl": OVERSHOOT_API_URL,
+        "apiKey": OVERSHOOT_API_KEY if OVERSHOOT_API_KEY else "",
+        "hasApiKey": bool(OVERSHOOT_API_KEY and OVERSHOOT_API_KEY != "your-api-key")
     }
 
 
