@@ -151,6 +151,7 @@ class Project(BaseModel):
     userId: str
     name: str
     videos: List[Dict[str, Any]] = Field(default_factory=list)
+    nodes: Optional[Dict[str, Any]] = Field(default=None)  # UserNodes configuration
     createdAt: datetime
     updatedAt: datetime
 
@@ -716,6 +717,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
         "userId": userId,
         "name": project_data.name.strip(),
         "videos": [],  # Initialize videos array
+        "nodes": None,  # Initialize nodes configuration
         "createdAt": now,
         "updatedAt": now,
     }
@@ -728,6 +730,7 @@ async def create_project(project_data: ProjectCreate, userId: str = Header(None,
         "userId": project["userId"],
         "name": project["name"],
         "videos": project.get("videos", []),
+        "nodes": project.get("nodes"),  # Include nodes in response
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -752,6 +755,7 @@ async def get_project(project_id: str, userId: str = Header(None, alias="X-User-
         raise HTTPException(status_code=404, detail="Project not found")
     
     videos = project.get("videos", [])
+    nodes = project.get("nodes")  # Get nodes configuration
     # Debug logging
     print(f"DEBUG: Project {project_id} has {len(videos)} videos")
     print(f"DEBUG: Videos field exists: {'videos' in project}")
@@ -762,6 +766,7 @@ async def get_project(project_id: str, userId: str = Header(None, alias="X-User-
         "userId": project["userId"],
         "name": project["name"],
         "videos": videos,
+        "nodes": nodes,  # Include nodes in response
         "createdAt": project["createdAt"],
         "updatedAt": project["updatedAt"],
     }
@@ -958,6 +963,47 @@ async def get_video_file(
     response.headers["Access-Control-Allow-Headers"] = "*"
     
     return response
+
+
+@app.put("/api/projects/{project_id}/nodes")
+async def save_project_nodes(
+    project_id: str,
+    nodes_data: Dict[str, Any],
+    userId: str = Header(None, alias="X-User-Id")
+):
+    """Save nodes configuration for a project"""
+    if not userId:
+        raise HTTPException(status_code=401, detail="Unauthorized: User ID required")
+    
+    if db is None:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+    
+    try:
+        object_id = ObjectId(project_id)
+    except (InvalidId, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    
+    # Verify project exists and belongs to user
+    project = db.projects.find_one({"_id": object_id, "userId": userId})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Update project with nodes configuration
+    db.projects.update_one(
+        {"_id": object_id, "userId": userId},
+        {
+            "$set": {
+                "nodes": nodes_data,
+                "updatedAt": datetime.utcnow()
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "message": "Nodes saved successfully",
+        "nodes": nodes_data
+    }
 
 
 # ============================================================================
