@@ -84,7 +84,12 @@ export function ProjectView({ project, onBack }) {
   const fileInputRef = useRef(null);
   const videoRefs = useRef({}); // Refs for video elements to control playback
 
-  // Overshoot SDK integration for camera
+  // Project prompt state - fetched from MongoDB nodes
+  const [projectPrompt, setProjectPrompt] = useState(null);
+  const [projectOutputSchema, setProjectOutputSchema] = useState(null);
+  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
+
+  // Overshoot SDK integration for camera - uses project-specific prompt
   const {
     isActive: isOvershootActive,
     isConnecting: isOvershootConnecting,
@@ -93,24 +98,27 @@ export function ProjectView({ project, onBack }) {
     stop: stopOvershoot,
     videoRef: overshootVideoRef,
   } = useOvershootVision({
+    prompt: projectPrompt,
+    outputSchema: projectOutputSchema,
     onResult: (result, isJson, timestamp) => {
       // Results are automatically sent to backend via the hook
-      // You can add custom handling here if needed
-      console.log("Result received in ProjectView:", result);
+      // Log immediately for visibility
+      console.log(`📊 ProjectView Result [${timestamp}]:`, result);
     },
     onError: (error) => {
-      console.error("Overshoot error in ProjectView:", error);
+      console.error("❌ Overshoot error in ProjectView:", error);
     },
   });
 
   // Overshoot SDK integration for video files
+  // Pass project-specific prompt and outputSchema to video processing
   const {
     isProcessing: isProcessingVideos,
     error: videoProcessingError,
     processVideoFile,
     stopAll: stopAllVideoProcessing,
     cleanup: cleanupVideoProcessing,
-  } = useOvershootVideoFile();
+  } = useOvershootVideoFile(projectPrompt, projectOutputSchema);
 
   // Handle node type change from dropdown
   const handleNodeTypeChange = useCallback((nodeId, newType) => {
@@ -433,27 +441,50 @@ export function ProjectView({ project, onBack }) {
     }
   };
 
-  // Handle Overshoot camera activation
+  // Handle Overshoot camera activation - optimized for fastest connection
   const handleWebcamStart = async () => {
     let videoId = null;
     try {
       setIsDialogOpen(false);
 
+      // CRITICAL: Don't wait for prompt - start connection immediately
+      // Prompt can be updated while connecting if needed
+      // Use default prompt if not ready yet (will update when prompt loads)
+      if (!projectPrompt && !isLoadingPrompt) {
+        console.warn("No prompt available, using default");
+        setProjectPrompt(
+          "Analyze the video feed and detect any relevant objects or events."
+        );
+      }
+
+      // If prompt is still loading, start with default - it will update when ready
+      // This prevents delay in connection start
+
       // CRITICAL: Add Overshoot camera to videos list FIRST so the video element gets rendered
       videoId = Date.now();
       setVideos((prev) => [...prev, { type: "overshoot", id: videoId }]);
 
-      // Wait for React to render the video element (use requestAnimationFrame for better timing)
-      await new Promise((resolve) => {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setTimeout(resolve, 50); // Small additional delay
-          });
+      // Start Overshoot immediately - don't wait for React render
+      // The SDK will handle video element setup internally, but starting early is faster
+      // Use single requestAnimationFrame for minimal delay (one frame instead of two)
+      requestAnimationFrame(() => {
+        startOvershoot().catch((error) => {
+          console.error("Error starting Overshoot vision:", error);
+          // Remove the video entry if start failed
+          if (videoId !== null) {
+            setVideos((prev) =>
+              prev.filter((v) => v.type !== "overshoot" || v.id !== videoId)
+            );
+          }
+          alert(
+            error.message ||
+              "Unable to start camera processing. Please check console for details."
+          );
         });
       });
 
-      // Now start the camera - the video element should be in the DOM
-      await startOvershoot();
+      // Don't await - let it start in background for fastest connection
+      return;
     } catch (error) {
       console.error("Error starting Overshoot vision:", error);
       // Remove the video entry if start failed
@@ -580,8 +611,25 @@ export function ProjectView({ project, onBack }) {
   const processedVideoIdsRef = useRef(new Set());
 
   // Process videos with Overshoot SDK when they're loaded
+  // CRITICAL: Wait for project prompt to be loaded before processing videos
   useEffect(() => {
     const processVideosWithOvershoot = async () => {
+      // Don't process if prompt is still loading (we need project-specific prompt)
+      if (isLoadingPrompt) {
+        console.log(
+          "⏳ Waiting for project prompt before processing videos..."
+        );
+        return;
+      }
+
+      // Ensure we have a prompt before processing videos
+      if (!projectPrompt) {
+        console.warn(
+          "⚠️ No project prompt available, skipping video processing"
+        );
+        return;
+      }
+
       // Only process file videos (not overshoot camera feeds)
       const fileVideos = videos.filter(
         (video) => video.type === "file" && video.videoId
@@ -603,6 +651,7 @@ export function ProjectView({ project, onBack }) {
       console.log(
         `Processing ${videosToProcess.length} new video(s) with Overshoot SDK...`
       );
+      console.log(`📝 Using project prompt: "${projectPrompt}"`);
 
       // Process each video with Overshoot SDK
       for (const video of videosToProcess) {
@@ -675,11 +724,25 @@ export function ProjectView({ project, onBack }) {
     if (videos.length > 0 && !isLoadingVideos) {
       processVideosWithOvershoot();
     }
-  }, [videos, isLoadingVideos, project.id, processVideoFile]);
+  }, [
+    videos,
+    isLoadingVideos,
+    project.id,
+    processVideoFile,
+    projectPrompt,
+    projectOutputSchema,
+    isLoadingPrompt,
+  ]);
 
   // Function to play video with fallback to muted if needed
+  // CRITICAL: This ensures continuous playback for Overshoot SDK frame capture
   const playVideoWithFallback = async (videoElement) => {
+    if (!videoElement) return;
+
     try {
+      // Ensure loop is set for continuous processing
+      videoElement.loop = true;
+
       // Try to play with sound first
       videoElement.muted = false;
       await videoElement.play();
@@ -691,16 +754,89 @@ export function ProjectView({ project, onBack }) {
       } catch (mutedError) {
         // Autoplay may be blocked by browser policy
         console.log("Autoplay prevented:", mutedError);
+        // Still ensure loop is set even if play fails
+        videoElement.loop = true;
       }
     }
   };
 
-  // Load nodes from MongoDB when project loads
+  // Monitor video playback to ensure continuous processing
   useEffect(() => {
-    const loadNodes = async () => {
-      try {
-        const projectData = await projectsAPI.getById(project.id);
+    if (!isProcessingVideos) return;
 
+    // Set up periodic check to ensure all videos stay playing
+    const playbackMonitor = setInterval(() => {
+      Object.entries(videoRefs.current).forEach(([key, videoEl]) => {
+        if (!videoEl || key.includes("overshoot")) return; // Skip Overshoot camera feed
+
+        // Ensure loop is set
+        if (!videoEl.loop) {
+          videoEl.loop = true;
+          console.log(`[Video ${key}] Enabled loop for continuous processing`);
+        }
+
+        // If video is paused and we're processing, resume it
+        if (videoEl.paused && isProcessingVideos) {
+          console.log(
+            `[Video ${key}] Video paused - resuming for continuous processing`
+          );
+          playVideoWithFallback(videoEl).catch(() => {
+            // Ignore errors
+          });
+        }
+
+        // If video has ended, restart it immediately
+        if (videoEl.ended) {
+          console.log(
+            `[Video ${key}] Video ended - restarting for continuous processing`
+          );
+          videoEl.currentTime = 0;
+          playVideoWithFallback(videoEl).catch(() => {
+            // Ignore errors
+          });
+        }
+      });
+    }, 1000); // Check every second
+
+    return () => {
+      clearInterval(playbackMonitor);
+    };
+  }, [isProcessingVideos, videoRefs]);
+
+  // Load nodes and prompt from MongoDB when project loads (parallel for speed)
+  useEffect(() => {
+    const loadProjectData = async () => {
+      if (!project.id) return;
+
+      setIsLoadingPrompt(true);
+
+      try {
+        // Fetch project data and prompt in parallel for maximum speed
+        const [projectData, promptData] = await Promise.all([
+          projectsAPI.getById(project.id),
+          projectsAPI.getProjectPrompt(project.id).catch((err) => {
+            console.warn("Failed to fetch prompt, using default:", err);
+            return {
+              prompt:
+                "Analyze the video feed and detect any relevant objects or events.",
+              hasNodes: false,
+              outputSchema: {},
+              nodes: [],
+            };
+          }),
+        ]);
+
+        // Set prompt and output schema for Overshoot
+        const finalPrompt =
+          promptData.prompt ||
+          "Analyze the video feed and detect any relevant objects or events.";
+        console.log(`🎯 Project Prompt Loaded:`, finalPrompt);
+        console.log(`📋 Output Schema:`, promptData.outputSchema);
+        setProjectPrompt(finalPrompt);
+        setProjectOutputSchema(promptData.outputSchema || null);
+        setIsLoadingPrompt(false);
+
+        // Load nodes for React Flow
         if (projectData.nodes && projectData.nodes.listeners) {
           const { nodes: loadedNodes, edges: loadedEdges } =
             userNodesToReactFlow(projectData.nodes);
@@ -738,13 +874,17 @@ export function ProjectView({ project, onBack }) {
           setNodeId(maxId + 1);
         }
       } catch (error) {
-        console.error("Error loading nodes:", error);
+        console.error("Error loading project data:", error);
+        setIsLoadingPrompt(false);
+        // Set default prompt on error
+        setProjectPrompt(
+          "Analyze the video feed and detect any relevant objects or events."
+        );
+        setProjectOutputSchema(null);
       }
     };
 
-    if (project.id) {
-      loadNodes();
-    }
+    loadProjectData();
   }, [project.id, handleNodeTypeChange, handleNodeDescriptionChange]);
 
   // Save nodes to MongoDB
@@ -756,7 +896,29 @@ export function ProjectView({ project, onBack }) {
       // Save to MongoDB via API
       await projectsAPI.saveNodes(project.id, userNodesData);
 
-      alert("Nodes saved successfully!");
+      // Refresh prompt after saving nodes (parallel for speed)
+      const promptData = await projectsAPI
+        .getProjectPrompt(project.id)
+        .catch((err) => {
+          console.warn("Failed to refresh prompt:", err);
+          return {
+            prompt:
+              "Analyze the video feed and detect any relevant objects or events.",
+            hasNodes: false,
+            outputSchema: {},
+            nodes: [],
+          };
+        });
+
+      const finalPrompt =
+        promptData.prompt ||
+        "Analyze the video feed and detect any relevant objects or events.";
+      console.log(`🎯 Prompt Updated After Save:`, finalPrompt);
+      console.log(`📋 Updated Output Schema:`, promptData.outputSchema);
+      setProjectPrompt(finalPrompt);
+      setProjectOutputSchema(promptData.outputSchema || null);
+
+      alert("Nodes saved successfully! Prompt updated.");
     } catch (error) {
       console.error("Error saving nodes:", error);
       alert(`Failed to save nodes: ${error.message}`);
@@ -852,6 +1014,39 @@ export function ProjectView({ project, onBack }) {
                                 await playVideoWithFallback(el);
                               };
 
+                              // CRITICAL: Ensure video loops for continuous processing
+                              // Overshoot SDK needs continuous frames to process
+                              el.loop = true;
+
+                              // Handle video ended - restart immediately for continuous processing
+                              const handleEnded = () => {
+                                console.log(
+                                  `[${video.name}] Video ended - restarting for continuous processing`
+                                );
+                                el.currentTime = 0;
+                                playVideo().catch((err) => {
+                                  console.warn(
+                                    `[${video.name}] Failed to restart video:`,
+                                    err
+                                  );
+                                });
+                              };
+                              el.addEventListener("ended", handleEnded);
+
+                              // Handle video pause - resume if paused while processing
+                              const handlePause = () => {
+                                // Only auto-resume if Overshoot is processing this video
+                                if (isProcessingVideos) {
+                                  console.log(
+                                    `[${video.name}] Video paused - resuming for continuous processing`
+                                  );
+                                  playVideo().catch(() => {
+                                    // Ignore autoplay errors
+                                  });
+                                }
+                              };
+                              el.addEventListener("pause", handlePause);
+
                               // If video is already loaded, play immediately
                               if (el.readyState >= 2) {
                                 playVideo();
@@ -866,12 +1061,19 @@ export function ProjectView({ project, onBack }) {
                                 };
                                 el.addEventListener("canplay", handleCanPlay);
                               }
+
+                              // Store cleanup function
+                              el._cleanupVideoListeners = () => {
+                                el.removeEventListener("ended", handleEnded);
+                                el.removeEventListener("pause", handlePause);
+                              };
                             }
                           }}
                           src={video.url}
                           controls={hoveredVideoIndex === index}
                           autoPlay
                           playsInline
+                          loop
                           className="w-full h-full object-contain"
                         >
                           Your browser does not support the video tag.

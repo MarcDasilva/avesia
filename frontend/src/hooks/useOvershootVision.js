@@ -6,12 +6,7 @@ import { overshootAPI } from "../lib/api";
  * Handles camera feed processing with Overshoot SDK
  */
 export function useOvershootVision(config = {}) {
-  const {
-    apiUrl,
-    apiKey,
-    onResult,
-    onError,
-  } = config;
+  const { apiUrl, apiKey, onResult, onError, prompt, outputSchema } = config;
 
   const [isActive, setIsActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -38,7 +33,7 @@ export function useOvershootVision(config = {}) {
   const logDebug = (message, data = null) => {
     if (import.meta.env.DEV) {
       // Only log in development, and make it less verbose
-      if (data && typeof data === 'object') {
+      if (data && typeof data === "object") {
         console.log(`[Debug] ${message}`);
       } else {
         console.log(`[Debug] ${message}`, data || "");
@@ -53,11 +48,21 @@ export function useOvershootVision(config = {}) {
     }
 
     try {
-      // Fetch config and nodes from backend
-      const [sdkConfig, nodesConfig] = await Promise.all([
-        overshootAPI.getConfig(),
-        overshootAPI.getNodes(),
-      ]);
+      // Use provided prompt (fastest path - no fetch needed)
+      let finalPrompt = prompt;
+      let finalOutputSchema = outputSchema;
+
+      // Fetch config in parallel with nodes (if needed) for maximum speed
+      const promises = [overshootAPI.getConfig()];
+
+      // Only fetch nodes if no prompt provided
+      if (!finalPrompt) {
+        promises.push(overshootAPI.getNodes());
+      }
+
+      // Wait for all needed data in parallel (much faster)
+      const results = await Promise.all(promises);
+      const sdkConfig = results[0];
 
       const finalApiUrl = apiUrl || sdkConfig.apiUrl;
       const finalApiKey = apiKey || sdkConfig.apiKey;
@@ -68,26 +73,52 @@ export function useOvershootVision(config = {}) {
         );
       }
 
-      logWithTimestamp(`✅ Config loaded (${nodesConfig.nodes?.length || 0} nodes)`);
+      // If we fetched nodes, use them now
+      if (!finalPrompt && results.length > 1) {
+        const nodesConfig = results[1];
+        finalPrompt = nodesConfig.prompt || "Read any visible text";
+        finalOutputSchema = nodesConfig.outputSchema;
+        logWithTimestamp(
+          `✅ Using default config (${nodesConfig.nodes?.length || 0} nodes)`
+        );
+      } else if (finalPrompt) {
+        logWithTimestamp(`✅ Using project-specific prompt`);
+      }
 
-      // Dynamically import Overshoot SDK
+      // Dynamically import Overshoot SDK (do this early, in parallel if possible)
+      // This import is cached by the browser, so it's fast on subsequent calls
       const { RealtimeVision } = await import(
         "https://cdn.jsdelivr.net/npm/@overshoot/sdk@0.1.0-alpha.2/dist/index.mjs"
       );
 
+      // Debug: Log the prompt being sent to Overshoot
+      console.log(`🎯 Overshoot SDK Prompt:`, finalPrompt);
+      console.log(`📋 Output Schema:`, finalOutputSchema);
+
+      // For camera feeds, Overshoot SDK auto-detects camera stream
+      // No explicit source needed - SDK will use getUserMedia stream automatically
+      // However, we should explicitly set source: { type: "camera" } for clarity
+      // But since we don't have the stream yet (parallel initialization), we'll let SDK auto-detect
       const visionConfig = {
         apiUrl: finalApiUrl,
         apiKey: finalApiKey,
-        prompt: nodesConfig.prompt || "Read any visible text",
-        onResult: async (result) => {
+        prompt: finalPrompt,
+        // Source not set here - SDK will auto-detect camera when start() is called
+        // This allows parallel initialization for faster connection
+        // Real-time optimization: make onResult synchronous for immediate processing
+        onResult: (result) => {
+          // DEBUG: Log that callback was triggered
+          console.log("🔔 onResult callback triggered!", result);
+
+          // Process immediately (synchronous) for lowest latency
           resultCountRef.current++;
           const timestamp = new Date().toISOString();
 
-          // Parse result if it's JSON
+          // Parse result if it's JSON (synchronous, no async/await delays)
           let parsedResult = result.result;
           let isJson = false;
 
-          if (nodesConfig.outputSchema && Object.keys(nodesConfig.outputSchema).length > 0) {
+          if (finalOutputSchema && Object.keys(finalOutputSchema).length > 0) {
             try {
               parsedResult = JSON.parse(result.result);
               isJson = true;
@@ -96,37 +127,71 @@ export function useOvershootVision(config = {}) {
             }
           }
 
-          // Only log every 5th result to reduce console noise
-          if (resultCountRef.current % 5 === 0) {
-            if (isJson) {
-              logWithTimestamp(`Result #${resultCountRef.current}: ${Object.keys(parsedResult).join(", ")}`);
-            } else {
-              logWithTimestamp(`Result #${resultCountRef.current}`);
-            }
-          }
-
-          // Send to backend (non-blocking)
-          try {
-            await overshootAPI.sendResult(
-              parsedResult,
-              timestamp,
-              nodesConfig.prompt,
-              nodesConfig.nodes?.length > 0 ? "structured" : null
+          // Log immediately (synchronous) - no async delays
+          // Include the prompt that was used for this result to verify alignment
+          if (isJson) {
+            console.log(
+              `🔍 Overshoot Result #${resultCountRef.current}`,
+              `\n📝 Prompt Used: "${finalPrompt}"`,
+              `\n📊 Result:`,
+              parsedResult
             );
-          } catch (err) {
-            // Silent fail - backend might be slow
+            logWithTimestamp(
+              `Result #${resultCountRef.current} (${Object.keys(
+                parsedResult
+              ).join(", ")})`
+            );
+          } else {
+            console.log(
+              `🔍 Overshoot Result #${resultCountRef.current}`,
+              `\n📝 Prompt Used: "${finalPrompt}"`,
+              `\n📊 Result:`,
+              parsedResult
+            );
+            logWithTimestamp(
+              `Result #${resultCountRef.current}: ${parsedResult}`
+            );
           }
 
-          // Call custom onResult callback if provided
+          // Call custom onResult callback immediately (synchronous)
           if (onResult) {
             onResult(parsedResult, isJson, timestamp);
           }
+
+          // Send to backend asynchronously (fire and forget, no blocking)
+          // Use setTimeout(0) to ensure callback completes first
+          setTimeout(() => {
+            overshootAPI
+              .sendResult(
+                parsedResult,
+                timestamp,
+                finalPrompt,
+                finalOutputSchema && Object.keys(finalOutputSchema).length > 0
+                  ? "structured"
+                  : null
+              )
+              .catch((err) => {
+                // Silent fail - backend might be slow
+                if (import.meta.env.DEV) {
+                  console.warn("Failed to send result to backend:", err);
+                }
+              });
+          }, 0);
         },
         onError: (error) => {
           const errorMsg = error.message || error.toString();
-          
+
+          // DEBUG: Always log errors to help diagnose issues
+          console.error("❌ Overshoot SDK onError callback triggered:", error);
+          console.error("❌ Error message:", errorMsg);
+          console.error("❌ Error stack:", error.stack);
+          console.error("❌ Full error object:", error);
+
           // Only log significant errors
-          if (!errorMsg.includes("WebSocket is closed") && !errorMsg.includes("before the connection")) {
+          if (
+            !errorMsg.includes("WebSocket is closed") &&
+            !errorMsg.includes("before the connection")
+          ) {
             logWithTimestamp(`❌ SDK error: ${errorMsg}`, null, "error");
           }
 
@@ -148,7 +213,11 @@ export function useOvershootVision(config = {}) {
             errorMsg.includes("stream_not_found") ||
             errorMsg.includes("Keepalive failed")
           ) {
-            logWithTimestamp("⚠️ Connection lost - restarting...", null, "warn");
+            logWithTimestamp(
+              "⚠️ Connection lost - restarting...",
+              null,
+              "warn"
+            );
           }
 
           if (onError) {
@@ -159,19 +228,30 @@ export function useOvershootVision(config = {}) {
       };
 
       // Add outputSchema if configured
-      if (nodesConfig.outputSchema && Object.keys(nodesConfig.outputSchema).length > 0) {
-        visionConfig.outputSchema = nodesConfig.outputSchema;
+      if (finalOutputSchema && Object.keys(finalOutputSchema).length > 0) {
+        visionConfig.outputSchema = finalOutputSchema;
       }
 
       const vision = new RealtimeVision(visionConfig);
       visionRef.current = vision;
+
+      // DEBUG: Log SDK instance creation
+      console.log("🔧 RealtimeVision instance created:", {
+        hasPrompt: !!finalPrompt,
+        hasOutputSchema: !!(
+          finalOutputSchema && Object.keys(finalOutputSchema).length > 0
+        ),
+        hasOnResult: typeof visionConfig.onResult === "function",
+        hasOnError: typeof visionConfig.onError === "function",
+        sourceType: visionConfig.source?.type || "camera",
+      });
 
       return vision;
     } catch (err) {
       logWithTimestamp(`❌ SDK init failed: ${err.message}`, null, "error");
       throw err;
     }
-  }, [apiUrl, apiKey, onResult, onError]);
+  }, [apiUrl, apiKey, onResult, onError, prompt, outputSchema]);
 
   // Start vision processing
   const start = useCallback(async () => {
@@ -185,58 +265,104 @@ export function useOvershootVision(config = {}) {
     try {
       logWithTimestamp("🚀 Starting...");
 
-      // Get camera stream
-      const stream = await Promise.race([
-        navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: "user",
-          },
-          audio: false,
+      // CRITICAL: Initialize SDK and get camera stream IN PARALLEL for fastest connection
+      // This significantly reduces connection time (can save 1-2 seconds)
+      const [stream, vision] = await Promise.all([
+        // Get camera stream - optimized for real-time performance
+        Promise.race([
+          navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640, max: 1280 }, // Lower resolution = lower latency
+              height: { ideal: 480, max: 720 },
+              frameRate: { ideal: 30, max: 30 }, // Consistent frame rate
+              facingMode: "user",
+              resizeMode: "none", // Prevent unnecessary resizing
+            },
+            audio: false,
+          }),
+          new Promise((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error("Camera stream request timed out after 10 seconds")
+                ),
+              10000
+            )
+          ),
+        ]),
+        // Initialize SDK in parallel (doesn't need stream immediately)
+        initializeSDK().catch((err) => {
+          logWithTimestamp(`⚠️ SDK init error: ${err.message}`, null, "warn");
+          throw err;
         }),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Camera stream request timed out after 10 seconds")),
-            10000
-          )
-        ),
       ]);
 
       streamRef.current = stream;
 
+      // CRITICAL: The Overshoot SDK auto-detects camera streams
+      // When no source is specified in config, SDK automatically uses getUserMedia for camera
+      // Since we got the stream via getUserMedia, the SDK will detect it when start() is called
+      // However, to ensure proper connection, we should verify stream is active
+      if (!vision) {
+        throw new Error("Vision instance not initialized");
+      }
+
+      // Verify stream is active before starting SDK
+      const streamTracks = stream.getTracks();
+      const activeTracks = streamTracks.filter((t) => t.readyState === "live");
+
+      console.log("🔧 Preparing camera stream for Overshoot SDK");
+      console.log("🔍 Stream verification:", {
+        hasStream: !!stream,
+        trackCount: streamTracks.length,
+        activeTracks: activeTracks.length,
+        trackIds: streamTracks.map((t) => t.id),
+        trackStates: streamTracks.map((t) => t.readyState),
+        trackKinds: streamTracks.map((t) => t.kind),
+        trackSettings: streamTracks.map((t) => t.getSettings()),
+      });
+
+      if (activeTracks.length === 0) {
+        throw new Error(
+          "Camera stream has no active tracks - cannot start SDK"
+        );
+      }
+
+      // SDK will auto-detect camera source when start() is called
+      // The getUserMedia stream is automatically captured by the SDK
+      console.log(
+        "✅ Stream verified - SDK will auto-detect camera when start() is called"
+      );
+
       // CRITICAL: Set video element with stream BEFORE SDK starts
       // The SDK gets the stream internally, but we need to display it in our video element
       // MediaStream tracks can be shared, so both can use the same stream
-      
-      // Wait for video element to be in DOM - it should be rendered by now
-      // But we'll wait a bit more and check multiple times
-      let attempts = 0;
-      const maxAttempts = 10;
-      while (!videoRef.current && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      
+
+      // Don't wait for video element - start SDK connection immediately
+      // The video element can be set up in parallel while SDK connects
+      // This significantly reduces connection time
       if (!videoRef.current) {
-        logWithTimestamp("⚠️ Video element not found after waiting", null, "warn");
-        logWithTimestamp("⚠️ Make sure video element is rendered before starting camera", null, "warn");
-        // Continue anyway - SDK will still work, just no preview
+        logWithTimestamp(
+          "⚠️ Video element not found - continuing anyway (will attach when ready)",
+          null,
+          "warn"
+        );
+        // Continue - SDK will work, video will attach when element is ready
       }
-      
+
       if (videoRef.current) {
         // Check if element is in DOM
         if (!videoRef.current.isConnected) {
           logWithTimestamp("⚠️ Video element not in DOM", null, "warn");
         }
-        
+
         // Set the stream
         videoRef.current.srcObject = stream;
         logDebug("Stream set on video element", {
           hasStream: !!videoRef.current.srcObject,
-          tracks: stream.getVideoTracks().length
+          tracks: stream.getVideoTracks().length,
         });
-        
+
         // Ensure video plays - this is critical
         const playVideo = async () => {
           if (!videoRef.current) return;
@@ -256,44 +382,47 @@ export function useOvershootVision(config = {}) {
                   // Ignore - might be autoplay policy
                 }
               }
-            }, 500);
+            }, 100); // Faster retry (100ms instead of 500ms) for real-time responsiveness
           }
         };
-        
+
         await playVideo();
-        
+
         // Set up event listeners to ensure video stays active
         const onLoadedMetadata = () => {
           logDebug("Video metadata loaded", {
             width: videoRef.current?.videoWidth,
             height: videoRef.current?.videoHeight,
-            readyState: videoRef.current?.readyState
+            readyState: videoRef.current?.readyState,
           });
           // Ensure it's playing
           if (videoRef.current && videoRef.current.paused) {
             videoRef.current.play().catch(() => {});
           }
         };
-        
+
         const onCanPlay = () => {
           logDebug("Video can play");
           if (videoRef.current && videoRef.current.paused) {
             videoRef.current.play().catch(() => {});
           }
         };
-        
-        videoRef.current.addEventListener('loadedmetadata', onLoadedMetadata);
-        videoRef.current.addEventListener('canplay', onCanPlay);
-        
+
+        videoRef.current.addEventListener("loadedmetadata", onLoadedMetadata);
+        videoRef.current.addEventListener("canplay", onCanPlay);
+
         // Store cleanup function
         videoRef.current._cleanupVideoListeners = () => {
           if (videoRef.current) {
-            videoRef.current.removeEventListener('loadedmetadata', onLoadedMetadata);
-            videoRef.current.removeEventListener('canplay', onCanPlay);
+            videoRef.current.removeEventListener(
+              "loadedmetadata",
+              onLoadedMetadata
+            );
+            videoRef.current.removeEventListener("canplay", onCanPlay);
           }
         };
-        
-        // Set up periodic check to ensure video stays playing
+
+        // Set up periodic check to ensure video stays playing (faster interval for real-time)
         const playInterval = setInterval(() => {
           if (videoRef.current) {
             // Check if stream is still attached
@@ -306,35 +435,19 @@ export function useOvershootVision(config = {}) {
               videoRef.current.play().catch(() => {});
             }
           }
-        }, 1000);
-        
+        }, 500); // Faster check interval (500ms instead of 1000ms) for real-time responsiveness
+
         // Store interval ID to clear later
         videoRef.current._playInterval = playInterval;
-        
-        // Wait for video to initialize
-        await new Promise((resolve) => {
-          if (videoRef.current) {
-            if (videoRef.current.readyState >= 2) {
-              resolve();
-            } else {
-              const onReady = () => {
-                if (videoRef.current) {
-                  videoRef.current.removeEventListener('loadedmetadata', onReady);
-                }
-                resolve();
-              };
-              videoRef.current.addEventListener('loadedmetadata', onReady);
-              setTimeout(resolve, 1000); // Longer wait to ensure video is ready
-            }
-          } else {
-            resolve();
-          }
-        });
-        
+
+        // Don't wait for video initialization - start SDK connection immediately
+        // Video setup happens in parallel, SDK doesn't need it to start connecting
+        // This removes a major delay in connection time
+
         logDebug("Video element setup complete", {
           hasSrcObject: !!videoRef.current.srcObject,
           paused: videoRef.current.paused,
-          readyState: videoRef.current.readyState
+          readyState: videoRef.current.readyState,
         });
       } else {
         logWithTimestamp("❌ Video element ref is null", null, "error");
@@ -359,21 +472,70 @@ export function useOvershootVision(config = {}) {
         };
       });
 
-      // Initialize and start SDK
-      const vision = await initializeSDK();
-      logWithTimestamp("⏳ Connecting...");
+      // SDK is already initialized (done in parallel above)
+      // Just start it immediately - no initialization delay
+      logWithTimestamp("⏳ Connecting to Overshoot...");
 
-      await Promise.race([
-        vision.start(),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Connection timeout")),
-            30000
-          )
-        ),
-      ]);
+      // CRITICAL: Verify stream is active before starting SDK
+      const activeTracksBeforeStart = stream
+        .getTracks()
+        .filter((t) => t.readyState === "live");
+      console.log("🔍 Stream verification before SDK start:", {
+        totalTracks: stream.getTracks().length,
+        activeTracks: activeTracksBeforeStart.length,
+        trackIds: stream.getTracks().map((t) => t.id),
+        trackStates: stream.getTracks().map((t) => t.readyState),
+      });
+
+      if (activeTracksBeforeStart.length === 0) {
+        throw new Error(
+          "Camera stream has no active tracks - cannot start SDK"
+        );
+      }
+
+      console.log(
+        "⏳ Calling vision.start() - SDK should auto-detect camera stream"
+      );
+      console.log("🔧 Vision instance state:", {
+        hasStart: typeof vision.start === "function",
+        hasStop: typeof vision.stop === "function",
+        configPrompt: vision.config?.prompt || "not accessible",
+        configHasOnResult: typeof vision.config?.onResult === "function",
+      });
+
+      // Start SDK connection immediately with reduced timeout for faster feedback
+      // Overshoot SDK automatically detects camera stream from getUserMedia
+      try {
+        const startResult = await Promise.race([
+          vision.start(),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Connection timeout after 15 seconds")),
+              15000
+            )
+          ),
+        ]);
+        console.log("✅ vision.start() resolved:", startResult);
+      } catch (startError) {
+        console.error("❌ vision.start() rejected:", startError);
+        console.error("❌ Start error details:", {
+          message: startError.message,
+          stack: startError.stack,
+          name: startError.name,
+          error: startError,
+        });
+        throw startError;
+      }
 
       logWithTimestamp("✅ Camera active");
+      console.log(
+        "✅ Overshoot SDK connected successfully - waiting for results..."
+      );
+      console.log("🔍 Results should appear in console via onResult callback");
+
+      // Get prompt from vision config (stored in SDK instance)
+      const visionPrompt = vision?.config?.prompt || prompt || "No prompt set";
+      console.log("📊 Current prompt:", visionPrompt);
 
       setIsActive(true);
       setIsConnecting(false);
@@ -467,4 +629,3 @@ export function useOvershootVision(config = {}) {
     videoRef,
   };
 }
-
