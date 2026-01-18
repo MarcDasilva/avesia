@@ -2,7 +2,7 @@
 Avesia Backend API - Unified FastAPI Application
 Combines Overshoot SDK/Node system and MongoDB/Projects API
 """
-from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Form, Query
+from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Form, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -907,6 +907,7 @@ async def upload_video(
 async def get_video_file(
     project_id: str,
     video_id: str,
+    request: Request,
     userId: Optional[str] = Header(None, alias="X-User-Id"),
     userId_query: Optional[str] = Query(None, alias="userId")
 ):
@@ -939,11 +940,24 @@ async def get_video_file(
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found on server")
     
-    return FileResponse(
+    # Create FileResponse with CORS headers
+    response = FileResponse(
         str(file_path),
         media_type=video.get("contentType", "video/mp4"),
         filename=video.get("filename", "video.mp4")
     )
+    
+    # Explicitly set CORS headers to ensure they're present
+    # This helps with fetch() requests from the frontend
+    # Get origin from request, or use configured frontend_url
+    origin = request.headers.get("origin") or frontend_url
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
 
 
 # ============================================================================
