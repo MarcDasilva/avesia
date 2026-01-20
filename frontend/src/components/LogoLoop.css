@@ -51,6 +51,8 @@
   margin-right: var(--logoloop-gap);
   font-size: var(--logoloop-logoHeight);
   line-height: 1;
+  display: flex;
+  align-items: center;
 }
 
 .logoloop--vertical .logoloop__item {
@@ -75,12 +77,16 @@
 .logoloop__item img {
   height: var(--logoloop-logoHeight);
   width: auto;
+  max-width: none;
   display: block;
   object-fit: contain;
+  object-position: center;
   image-rendering: -webkit-optimize-contrast;
   -webkit-user-drag: none;
   pointer-events: none;
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  filter: brightness(0) invert(1);
+  vertical-align: middle;
 }
 
 .logoloop--scale-hover .logoloop__item {

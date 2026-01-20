@@ -144,21 +144,30 @@ function App() {
           <LogoLoop
             logos={[
               {
-                src: "/logoloop/png-clipart-node-js-software-framework-javascript-framework-express-js-surge-text-logo.png",
-                alt: "Node.js",
+                src: "/logoloop/atom.png",
+                alt: "React",
               },
               {
-                src: "/logoloop/python-logo-png-favpng-0QMxsF2NWS0idCXhSQDmcvW1w.jpg",
+                src: "/logoloop/js.png",
+                alt: "JavaScript",
+              },
+              {
+                src: "/logoloop/python.png",
                 alt: "Python",
               },
               {
-                src: "/logoloop/Screenshot 2026-01-17 at 3.55.10 PM.png",
-                alt: "Logo",
+                src: "/logoloop/mongodb.svg",
+                alt: "MongoDB",
+              },
+              {
+                src: "/logoloop/supabase_logo_icon_249481.png",
+                alt: "Supabase",
               },
             ]}
             speed={60}
             direction="left"
             logoHeight={60}
+            gap={40}
             fadeOut={true}
             fadeOutColor="#000000"
             width={textWidth}
@@ -267,21 +276,30 @@ smart`}
             <LogoLoop
               logos={[
                 {
-                  src: "/logoloop/png-clipart-node-js-software-framework-javascript-framework-express-js-surge-text-logo.png",
-                  alt: "Node.js",
+                  src: "/logoloop/atom.png",
+                  alt: "React",
                 },
                 {
-                  src: "/logoloop/python-logo-png-favpng-0QMxsF2NWS0idCXhSQDmcvW1w.jpg",
+                  src: "/logoloop/js.png",
+                  alt: "JavaScript",
+                },
+                {
+                  src: "/logoloop/python.png",
                   alt: "Python",
                 },
                 {
-                  src: "/logoloop/Screenshot 2026-01-17 at 3.55.10 PM.png",
-                  alt: "Logo",
+                  src: "/logoloop/mongodb.svg",
+                  alt: "MongoDB",
+                },
+                {
+                  src: "/logoloop/supabase_logo_icon_249481.png",
+                  alt: "Supabase",
                 },
               ]}
               speed={60}
               direction="left"
               logoHeight={60}
+              gap={40}
               fadeOut={true}
               fadeOutColor="#000000"
               width="fit-content"
