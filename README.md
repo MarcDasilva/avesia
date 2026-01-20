@@ -1,6 +1,7 @@
 # Avesia
 
 > Making cameras smart
+> https://devpost.com/software/avesia
 
 Avesia is a comprehensive project management platform for intelligent camera and video analysis. It combines AI-powered video detection with a visual node-based editing system, enabling users to create smart camera solutions with conditional logic, event triggers, and automated alerts.
 
